@@ -1,0 +1,173 @@
+{
+  "$comment": "SYNTHETIC EXAMPLE ONLY. Every value is fabricated. Hosts use RFC 2606 reserved domains; addresses use RFC 5737 documentation ranges. This profile is shipped so the framework can be exercised and tested without any real target. Copy it into an engagement directory and edit it there -- never edit it in place and never put real values in the framework.",
+  "schema": "target-profile/1",
+  "identity": {
+    "name": "example-callback-api",
+    "description": "Synthetic four-endpoint callback API used by the framework's own tests. Models a common shape: one request field whose meaning differs per endpoint, plus a separate correlation identifier, and an application envelope that returns HTTP 200 for both acceptance and refusal.",
+    "engagement_ref": "EXAMPLE-0000"
+  },
+  "transport": {
+    "base_url": "https://api.example.com/v1",
+    "proxy": "http://127.0.0.1:8080",
+    "timeout_s": 45,
+    "delay_s": 0.25,
+    "tls_verify": {"mode": "insecure", "ca_path": null},
+    "client_cert": {
+      "mode": "none",
+      "cert_path": null,
+      "key_path": null,
+      "note": "Set mode to 'proxy' when the target enforces mutual TLS and the certificate is configured inside the intercepting proxy, because the proxy terminates TLS and performs the upstream handshake. Set 'direct' only for transport-layer evidence captured without the proxy."
+    },
+    "extra_args": []
+  },
+  "auth": {
+    "provider": "header_token",
+    "default_identity": "primary",
+    "identities": {
+      "primary": {
+        "purpose": "positive",
+        "role": "api-user",
+        "description": "Correct role, valid credential. The baseline identity.",
+        "headers": {
+          "x-client-id": "${ENV:EXAMPLE_PRIMARY_ID}",
+          "x-client-token": "${ENV:EXAMPLE_PRIMARY_TOKEN}"
+        }
+      },
+      "wrong_role": {
+        "purpose": "wrong_role",
+        "role": "support",
+        "description": "Valid credential, insufficient role. Drives P1 function-level authorization testing.",
+        "headers": {
+          "x-client-id": "${ENV:EXAMPLE_WRONGROLE_ID}",
+          "x-client-token": "${ENV:EXAMPLE_WRONGROLE_TOKEN}"
+        }
+      },
+      "bad_token": {
+        "purpose": "invalid_credential",
+        "role": "api-user",
+        "description": "Correct role, invalid credential. Drives P2 authentication testing.",
+        "headers": {
+          "x-client-id": "${ENV:EXAMPLE_BADTOKEN_ID}",
+          "x-client-token": "${ENV:EXAMPLE_BADTOKEN_TOKEN}"
+        }
+      }
+    }
+  },
+  "endpoints": [
+    {
+      "id": "resource_create",
+      "name": "Create resource callback",
+      "path": "/notify/created",
+      "methods": ["POST"],
+      "identifier_space": "resource_ref",
+      "payload_template": "standard"
+    },
+    {
+      "id": "resource_update",
+      "name": "Update resource callback",
+      "path": "/notify/updated",
+      "methods": ["POST"],
+      "identifier_space": "resource_ref",
+      "payload_template": "standard"
+    },
+    {
+      "id": "audit_entry",
+      "name": "Audit trail callback",
+      "path": "/notify/audit-entry",
+      "methods": ["POST"],
+      "identifier_space": "audit_ref",
+      "payload_template": "standard"
+    },
+    {
+      "id": "declaration",
+      "name": "Declaration callback",
+      "path": "/notify/declaration",
+      "methods": ["POST"],
+      "identifier_space": "declaration_ref",
+      "payload_template": "standard"
+    }
+  ],
+  "identifier_spaces": {
+    "resource_ref": {
+      "description": "Business reference for a resource. Distinct namespace from the audit and declaration references, which is what makes cross-namespace substitution (family A) meaningful.",
+      "generator": "pattern:SYNTH-@@#######",
+      "example": "SYNTH-AB1234567"
+    },
+    "audit_ref": {
+      "description": "Audit entry reference.",
+      "generator": "uuid4",
+      "example": "00000000-0000-4000-8000-000000000000"
+    },
+    "declaration_ref": {
+      "description": "Declaration reference.",
+      "generator": "pattern:SYNTH-DEC-########",
+      "example": "SYNTH-DEC-00000000"
+    },
+    "correlation": {
+      "description": "Per-request correlation identifier. A 64-character hex value in this example, which is what makes the format and length variants in family G meaningful.",
+      "generator": "hex:64",
+      "example": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "payload_templates": {
+    "standard": {
+      "body": {
+        "message": {
+          "key": "SYNTH-SEED-0000000",
+          "error": null,
+          "note": "Operation completed"
+        },
+        "success": true,
+        "correlationId": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "identifier_path": "message.key",
+      "correlation_path": "correlationId",
+      "status_flag_path": "success",
+      "error_path": "message.error",
+      "note_path": "message.note",
+      "mutable_paths": ["message.key", "message.error", "message.note", "success", "correlationId"]
+    }
+  },
+  "response_model": {
+    "status_layers": {
+      "400": "validation_reject",
+      "401": "auth_reject",
+      "403": "auth_reject",
+      "404": "route_404",
+      "405": "method_reject",
+      "409": "business_reject",
+      "413": "edge_reject",
+      "415": "ctype_reject",
+      "429": "edge_reject",
+      "2xx": "accepted_success",
+      "5xx": "server_error",
+      "default": "other"
+    },
+    "envelope": {
+      "code_path": "resultCode",
+      "remark_path": "resultMessage",
+      "data_path": "errors",
+      "success_values": ["0000"],
+      "auth_failure_values": ["0401"]
+    },
+    "edge_block_markers": [
+      "No required SSL certificate was sent",
+      "The SSL certificate error"
+    ],
+    "business_markers": [
+      "Record Not Found",
+      "already been processed"
+    ],
+    "verdict_policy": "layered"
+  },
+  "fidelity_expectations": {
+    "enabled": true,
+    "large_body_bytes": 200000,
+    "large_body_status": "413",
+    "nul_byte_status": "400"
+  },
+  "notes": [
+    "This profile is referenced by the framework test suite. Changing endpoint ids or identifier spaces will change expected case counts in tests/unit/test_generators.py.",
+    "The envelope models an API that answers HTTP 200 for both success and refusal, which is why layer attribution must consult the body rather than the status."
+  ]
+}

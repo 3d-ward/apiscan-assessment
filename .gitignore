@@ -1,0 +1,50 @@
+# ── Engagement data must never live in the framework ──────────────────────
+# If any of these ever appear here, that is a contamination bug, not a gitignore job.
+/evidence/
+/findings/
+/reports/
+/engagements/
+*.engagement/
+
+# ── Secrets ───────────────────────────────────────────────────────────────
+.env
+.env.*
+.secrets*
+*.secrets.json
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.jks
+
+# ── Local / generated ─────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# ── OS metadata (leaks directory listings) ────────────────────────────────
+.DS_Store
+._*
+Thumbs.db
+desktop.ini
+
+# ── Captured output ───────────────────────────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.xlsx
+*.docx
+*.pdf
+out/
+runs/

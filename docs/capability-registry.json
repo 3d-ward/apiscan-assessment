@@ -1,0 +1,824 @@
+{
+  "$comment": "Sanitised capability registry. Derived from the audit-side registry by removing source-implementation paths and engagement-specific detail. Describes WHAT each capability does and WHERE it now lives. Entries CAP-043..CAP-049 were identified after the original extraction audit and were absent from its 42-capability count; they are recorded here rather than left implicit so the coverage figure stays honest.",
+  "schema": "capability-registry/1",
+  "version": "1.1.0",
+  "capabilities": [
+    {
+      "id": "CAP-001",
+      "name": "Proxy-mediated HTTP transport",
+      "stage": "P3",
+      "category": "Execution",
+      "description": "Send every assessment request through an intercepting proxy so traffic also lands in proxy history for manual review and replay. curl subprocess with -x, --proxy-insecure, CA pinning when available, --trace-ascii wire capture, Expect: suppression, --data-binary from file to preserve exact bytes.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/core/transport.py",
+      "verification": "unit: argv construction matrix; integration: loopback",
+      "dependencies": [
+        "curl"
+      ],
+      "limitations": [
+        "proxy latency distorts throughput measurement",
+        "proxy may normalise some malformed bytes"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-002",
+      "name": "Multi-account credential matrix",
+      "stage": "P1",
+      "category": "Authentication",
+      "description": "Named credential sets exercised as positive and negative identities (valid / wrong-role / invalid-token), selectable per case, with per-header removal, override, duplication and case-variation.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/core/auth.py",
+      "verification": "unit: header/bearer/basic providers, purpose lookup",
+      "dependencies": [],
+      "limitations": [
+        "header-based auth only; no OAuth/JWT/HMAC/mTLS-identity flows"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-003",
+      "name": "Header mutation engine",
+      "stage": "P2",
+      "category": "Request shaping",
+      "description": "Per-case header overrides where None removes (case-insensitively across existing spellings), a list emits duplicates in order, and a string replaces. Underpins auth-stripping, duplicate-token precedence, verb tunnelling and source-IP spoofing cases.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/core/headers.py",
+      "verification": "unit: all four mutation modes incl. order stability",
+      "dependencies": [],
+      "limitations": [
+        "cannot express header ordering beyond duplicates"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-004",
+      "name": "Tamper corpus taxonomy (A-J)",
+      "stage": "P2",
+      "category": "Test case generation",
+      "description": "Ten generic payload-tamper families: cross-resource identifier substitution; success/error state confusion; injection (SQLi, UNION, XSS, traversal, CRLF, template, EL, command, NoSQL operator, NUL byte, log forging); type confusion; structural (missing/empty/array/__proto__/deep-nest/duplicate-key/truncated); resource limits; identifier integrity and replay; Content-Type matrix; HTTP method matrix; credential and header tampering.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/corpus/generators/families.py, framework/methodology/taxonomy.py",
+      "verification": "unit: all ten families emit; JSON validity; identifier uniqueness",
+      "dependencies": [],
+      "limitations": [
+        "JSON bodies only; no XML/form/multipart/GraphQL variants"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-005",
+      "name": "Phase model P1-P7 mapped to OWASP API Top 10",
+      "stage": "P2",
+      "category": "Methodology",
+      "description": "Ordered assessment phases, deliberately sequenced least-to-most state-mutating: function-level authorization (API5), authentication (API2), object/identifier binding (API1 BOLA), business-logic abuse, mass assignment (API3), breadth across remaining endpoints, surface (verb tunnelling, header trust, source-IP spoofing). Each case records phase, state_mutating flag and a specification clause reference.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/methodology/phases.py, framework/corpus/generators/phases.py",
+      "verification": "unit: ordering invariant, OWASP mapping, truncation",
+      "dependencies": [],
+      "limitations": [
+        "no rate/quota phase; no sequencing/workflow-order abuse phase"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-006",
+      "name": "Layer-attribution oracle",
+      "stage": "P4",
+      "category": "Classification",
+      "description": "The core analytic idea: HTTP status is not the verdict. Attribute each response to the layer that answered it - transport_error, edge_reject (413/414/431), auth_reject (401/403), method_reject (405), ctype_reject (415), validation_reject (400), server_error (5xx), route_404, business_reached (404/409 with business remark), business_reached_200, accepted_success - then map expectation x layer to a verdict.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/oracle/layers.py",
+      "verification": "unit: full status/body matrix; regression: differential vs reference",
+      "dependencies": [],
+      "limitations": [
+        "status-code heuristics are HTTP/JSON specific",
+        "404 disambiguation relies on a business remark being present"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-007",
+      "name": "Expectation-to-verdict mapping",
+      "stage": "P4",
+      "category": "Classification",
+      "description": "Maps declared expectation (reject / accept / observe) against the attributed layer to CONTROL-PRESENT, CONTROL-ABSENT, OVER-BLOCKED, UNCLEAR, ERROR or OBSERVED. Makes a security control's presence the unit of measurement instead of pass/fail.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/oracle/verdict.py",
+      "verification": "unit: full expectation x layer matrix; regression: policy divergence pinned",
+      "dependencies": [
+        "CAP-006"
+      ],
+      "limitations": [
+        "three expectation kinds only"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-008",
+      "name": "Application-envelope decoding",
+      "stage": "P4",
+      "category": "Classification",
+      "description": "Handles APIs that return HTTP 200 for everything and signal outcome in the body (a status code field plus remark/data fields). The application layer, not the HTTP status, decides accept vs reject.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/oracle/envelope.py",
+      "verification": "unit: nested path, malformed fallback, absent cases",
+      "dependencies": [],
+      "limitations": [
+        "regex extraction rather than parsed JSON path; brittle on nested envelopes"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-009",
+      "name": "Information-disclosure detectors",
+      "stage": "P4",
+      "category": "Vulnerability discovery",
+      "description": "Regex detector set over response bodies: framework stack traces (Java/Python/Spring/servlet), SQL error signatures (SQLException, ORA-nnnnn, syntax error at or near, MySQL syntax, SQLSTATE), internal filesystem paths.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/oracle/detectors.py + rules/disclosure.json",
+      "verification": "unit: positive fixture per rule, clean-corpus negatives",
+      "dependencies": [],
+      "limitations": [
+        "Java/Python/SQL biased; no .NET/Go/Node/PHP signatures"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-010",
+      "name": "Payload-reflection detector",
+      "stage": "P4",
+      "category": "Vulnerability discovery",
+      "description": "Flags verbatim echo of a submitted payload in the response, escalating severity when the reflected value came from an injection case.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/oracle/detectors.py",
+      "verification": "unit: verbatim and encoded variants, severity escalation",
+      "dependencies": [],
+      "limitations": [
+        "length>6 heuristic; no encoded-reflection detection (HTML/URL/unicode escaped)"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-011",
+      "name": "Blocked-vs-pass integrity rule",
+      "stage": "P4",
+      "category": "Assessment integrity",
+      "description": "A request stopped at an edge control (e.g. mTLS refusal) is recorded as BLOCKED, never as a PASS, so unreached tests are never counted as evidence of a working control.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/oracle/verdict.py, framework/findings/coverage.py",
+      "verification": "unit: blocked never maps to a pass under either policy",
+      "dependencies": [],
+      "limitations": [
+        "marker strings are server-implementation specific"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-012",
+      "name": "Proxy response-splitting correction",
+      "stage": "P5",
+      "category": "Evidence integrity",
+      "description": "When routed through a proxy, curl emits the proxy's CONNECT 200 header block first; splitting on the first blank line yields the wrong headers. Takes the LAST HTTP/n block instead.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/core/transport.py",
+      "verification": "unit: proxied, direct, 1xx interim, degenerate",
+      "dependencies": [],
+      "limitations": [
+        "assumes no legitimate multi-response body content starting with HTTP/"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-013",
+      "name": "Structured evidence capture",
+      "stage": "P5",
+      "category": "Evidence collection",
+      "description": "Timestamped run directory with per-case request bytes, full response including headers, and wire-level trace; plus a machine-readable results file and a latest-run pointer. Request bodies written with surrogatepass so control characters and lone surrogates survive to disk.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/evidence/store.py",
+      "verification": "unit: layout, manifest, tamper and unlisted-file detection",
+      "dependencies": [],
+      "limitations": [
+        "no integrity hash over evidence; no chain-of-custody record"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-014",
+      "name": "Offline re-classification",
+      "stage": "P4",
+      "category": "Quality assurance",
+      "description": "Re-judge a completed run from stored responses without re-sending anything, so a classifier change costs no extra traffic and no repeated state mutation.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/runner.py:reclassify",
+      "verification": "integration: replay reproduces live verdicts exactly",
+      "dependencies": [
+        "CAP-006",
+        "CAP-013"
+      ],
+      "limitations": [
+        "requires the original corpus definition to still match the run"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-015",
+      "name": "Deterministic proxy-history correlation",
+      "stage": "P6",
+      "category": "Evidence integrity",
+      "description": "Proxy history search matches the URL, not the request body, so a unique per-case URL marker makes the filtered history exactly one row. Removes reliance on history sort order, which is not guaranteed newest-first.",
+      "status": "fully_reconstructed",
+      "implemented_in": "tools/proxy/markers.py",
+      "verification": "unit: token uniqueness, query and header modes, default-off",
+      "dependencies": [
+        "CAP-001"
+      ],
+      "limitations": [
+        "adds a query parameter - must be verified behaviourally inert per target",
+        "off by default so PoC requests stay byte-identical"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-016",
+      "name": "Evidence-rendering PoC generator",
+      "stage": "P6",
+      "category": "Reporting",
+      "description": "Rasterises verbatim captured request/response bytes to an image via headless Chrome. Touches no screen API, so it is safe unattended and cannot capture unrelated windows. Content-sized canvas, highlight terms, isolated browser profile directory (without which headless Chrome contends for the default profile lock and hangs), and a provenance footer.",
+      "status": "fully_reconstructed",
+      "implemented_in": "tools/capture/render.py",
+      "verification": "unit: HTML assembly, escaping, provenance guard; runtime: PNG produced",
+      "dependencies": [
+        "headless Chrome/Chromium"
+      ],
+      "limitations": [
+        "requires a Chrome binary; 6000-char truncation per file"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-017",
+      "name": "Provenance-honesty rule for PoC evidence",
+      "stage": "P6",
+      "category": "Assessment integrity",
+      "description": "Evidence not captured through the proxy must not carry the proxy provenance footer. Specifically, TLS-layer findings cannot be captured through an intercepting proxy at all, because the proxy terminates TLS and presents its own configured client certificate - a 'no client certificate' test silently acquires one and the finding stops reproducing. Such evidence is captured direct, rendered, and filename-labelled to make the difference explicit.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/evidence/provenance.py",
+      "verification": "unit: both guard directions; suffix uniqueness",
+      "dependencies": [
+        "CAP-016"
+      ],
+      "limitations": [
+        "a documented discipline, only partly mechanisable"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-018",
+      "name": "Window-scoped screenshot capture",
+      "stage": "P6",
+      "category": "Reporting",
+      "description": "Captures one named application window by resolved window id, never the screen or a region, so nothing else on the desktop can leak into a deliverable. Picks the largest matching layer-0 window to avoid grabbing dialogs. An earlier full-screen implementation captured an unrelated window and was removed.",
+      "status": "partially_reconstructed",
+      "implemented_in": "tools/capture/window.py",
+      "verification": "unit: window-selection logic; runtime NOT VERIFIED (Quartz absent)",
+      "dependencies": [
+        "macOS screencapture",
+        "pyobjc Quartz"
+      ],
+      "limitations": [
+        "macOS only; needs Screen Recording consent; Quartz unavailable here so NOT testable in this environment"
+      ],
+      "priority": "P2"
+    },
+    {
+      "id": "CAP-019",
+      "name": "Proxy GUI automation",
+      "stage": "P6",
+      "category": "Automation",
+      "description": "Drives a Java/Swing proxy UI with synthetic Quartz mouse/keyboard events to select a specific history row before capture. Carries hard-won operational knowledge: OS-level UI scripting reports success while clicks do not land; right-anchored coordinates because the search field tracks the right edge and a left-anchored constant only lands at one window width; modifier-key release before typing, because a leaked modifier turns subsequent keystrokes into shortcuts and silently toggles interception on; the search field is disabled while the filter toggle is off; incremental drag events for the request/response splitter, since a collapsed request pane yields a PoC that does not evidence its own request.",
+      "status": "replaced",
+      "implemented_in": "tools/capture/render.py, tools/proxy/markers.py",
+      "verification": "GUI event automation was NOT reimplemented; superseded by deterministic markers plus rendered evidence. Operational lessons retained in docs.",
+      "dependencies": [
+        "macOS",
+        "pyobjc Quartz",
+        "Accessibility consent",
+        "Pillow for the toggle pixel probe"
+      ],
+      "limitations": [
+        "coordinate offsets are calibrated per proxy version/theme - inherently brittle",
+        "macOS only",
+        "untestable here"
+      ],
+      "priority": "P2"
+    },
+    {
+      "id": "CAP-020",
+      "name": "Pre-capture proxy health guard",
+      "stage": "P6",
+      "category": "Quality assurance",
+      "description": "Before each capture, verify the proxy forwards rather than holds requests. UI driving can toggle interception on by accident; every request then queues, curl times out, and history rows are logged with no response - silently producing PoC images with an empty response pane. Checked before, not discovered after; aborts with the exact remedy and keeps already-valid images.",
+      "status": "fully_reconstructed",
+      "implemented_in": "tools/proxy/health.py",
+      "verification": "unit: healthy/holding/unreachable; probe target no longer a third-party host",
+      "dependencies": [
+        "curl",
+        "a reachable no-auth URL"
+      ],
+      "limitations": [
+        "default probe URL is an external host - unsuitable for isolated networks"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-021",
+      "name": "Preflight readiness gate",
+      "stage": "P0",
+      "category": "Environment preparation",
+      "description": "Ordered dependency checks where the first failure is the thing to fix, each carrying a concrete remediation string, with a non-zero exit gating the run. Covers proxy process and listener; interception state via a timing probe; proxy CA on disk and live-vs-disk fingerprint comparison; client-certificate material readable and matching the issued certificate; a decisive end-to-end authenticated probe; PoC dependency availability; corpus loadability; evidence-directory writability and free disk.",
+      "status": "fully_reconstructed",
+      "implemented_in": "automation/preflight/checks.py",
+      "verification": "integration: three scenarios incl. fail-fast and path-guard blocker",
+      "dependencies": [
+        "curl",
+        "openssl",
+        "socket"
+      ],
+      "limitations": [
+        "checks are tied to one proxy product and one auth scheme"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-022",
+      "name": "Proxy-fidelity verification",
+      "stage": "P0",
+      "category": "Evidence integrity",
+      "description": "Confirms the proxy does not alter the specific edge cases the corpus depends on, before trusting their results: a large body must still reach the server's size limit rather than be buffered or stripped, and an escaped NUL byte must arrive unaltered. Without this, a negative result may be the proxy's behaviour rather than the target's.",
+      "status": "fully_reconstructed",
+      "implemented_in": "tools/proxy/fidelity.py",
+      "verification": "unit: probe construction, unreliability propagation",
+      "dependencies": [
+        "CAP-001"
+      ],
+      "limitations": [
+        "expected status codes are target-specific, so assertions must come from the profile"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-023",
+      "name": "Scope-exclusion enforcement",
+      "stage": "P2",
+      "category": "Governance",
+      "description": "Cases carrying a scope-excluded flag and reason are skipped by default and listed as skipped; sending them requires an explicit opt-in flag documented as needing client authorisation. Encodes engagement rules of engagement (no DoS, no destructive payloads, no infrastructure pivoting, no bulk extraction) in the tooling rather than in the operator's memory.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/governance/scope.py",
+      "verification": "unit: attribute matching, default-deny, authorisation, expiry, ceiling",
+      "dependencies": [],
+      "limitations": [
+        "flags were maintained by hand in a separate file, so a new case can be missed"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-024",
+      "name": "State-mutation risk annotation",
+      "stage": "P2",
+      "category": "Governance",
+      "description": "Every case declares whether it mutates target state, and phases are ordered so mutation increases monotonically, allowing a run to stop before irreversible actions.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/corpus/case.py, framework/governance/scope.py",
+      "verification": "unit: default is mutating; risk ceiling filters",
+      "dependencies": [
+        "CAP-023"
+      ],
+      "limitations": [
+        "declared by the case author, not derived"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-025",
+      "name": "Non-destructive rate-limit probe",
+      "stage": "P3",
+      "category": "Assessment module",
+      "description": "Bounded concurrent burst to establish whether throttling exists, deliberately shaped to avoid denial of service: fixed request count, limited workers, every payload carrying a fresh identifier against an already-settled record so each request is rejected at the business layer and no state changes. Reports throughput, status distribution, throttle-response count and latency spread, and records whether the figure is citable (a proxied run understates achievable rate, so only the direct figure is quotable).",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/modules/rate_limit.py",
+      "verification": "unit: ceilings and authorisation refusal; citability flag",
+      "dependencies": [
+        "curl",
+        "ThreadPoolExecutor"
+      ],
+      "limitations": [
+        "single route per invocation; no ramp or sustained profile (intentionally)"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-026",
+      "name": "TLS and certificate posture assessment",
+      "stage": "P3",
+      "category": "Assessment module",
+      "description": "Transport-layer checks outside the HTTP path: negotiated protocol and cipher enumeration, server cipher preference, and certificate inspection for CRL distribution points, OCSP responder and AIA presence to assess whether revocation is actually possible. Also the finding pattern that differing TLS rejection messages prove chain validation rather than mere certificate presence, and that distinguishable errors permit state enumeration.",
+      "status": "partially_reconstructed",
+      "implemented_in": "framework/modules/tls_posture.py",
+      "verification": "unit: logic; cipher enumeration NOT VERIFIED (nmap/testssl absent)",
+      "dependencies": [
+        "openssl",
+        "optionally nmap/testssl.sh"
+      ],
+      "limitations": [
+        "relies on external tools when present; openssl-only coverage is narrower"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-027",
+      "name": "Re-validation corpus model",
+      "stage": "P9",
+      "category": "Methodology",
+      "description": "A model for retesting previously reported findings: each case belongs to a finding id, declares the payload and what a remediated implementation must do, and the verdict is derived only from observed responses - never from the client's own status column. Includes baseline oracle-calibration cases that prove the happy path works before negative results are trusted.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/corpus/generators/retest.py",
+      "verification": "unit: baseline gating, remediation-item typing",
+      "dependencies": [
+        "CAP-006",
+        "CAP-007"
+      ],
+      "limitations": [
+        "finding ids and remediation expectations are authored by hand"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-028",
+      "name": "Matrix-completion closure runs",
+      "stage": "P9",
+      "category": "Quality assurance",
+      "description": "When a remediation item says 'apply consistently across all endpoints', complete the matrix on every endpoint rather than inferring from the subset originally tested, so closure is evidenced rather than assumed. Closure cases are chosen to be validation-layer rejections: no state change, no volume, no destructive payload.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/corpus/case.py:find_gaps, generators/retest.py:closure_cases",
+      "verification": "unit: gap detection from a sparse matrix",
+      "dependencies": [
+        "CAP-027"
+      ],
+      "limitations": [
+        "gap detection was manual"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-029",
+      "name": "Targeted follow-up probes",
+      "stage": "P9",
+      "category": "Vulnerability validation",
+      "description": "Second-order questions raised by a first run, each a reusable generic technique: is a uniqueness or equality check case-sensitive (replay the same identifier upper/mixed-cased); is uniqueness global or per-endpoint (replay a consumed identifier on every other endpoint); do unsupported method and media type return the correct status on every endpoint; what is the exact scope of a sanitisation filter (probe each field independently rather than assuming the fix is global); is a size limit enforced on every backend node (repeat to hit a load-balanced pool); is a static credential still valid and does it signal expiry; which security response headers are present.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/corpus/generators/followup.py",
+      "verification": "unit: all seven probe templates",
+      "dependencies": [
+        "CAP-001",
+        "CAP-013"
+      ],
+      "limitations": [
+        "probe set authored per engagement"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-030",
+      "name": "Finding consolidation model",
+      "stage": "P7",
+      "category": "Finding classification",
+      "description": "One row per distinct defect, not one per test case. Separates three things that must not be conflated: DEFECT (confirmed, reproduced with evidence), UNRESOLVED (accepted without error but impact not provable externally) and CONTROL (a control that was attacked and held - recorded as a positive result). Affected-endpoint lists, occurrence counts and evidence paths are derived from run data, never hand-typed.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/findings/register.py",
+      "verification": "unit: derivation, stale-reference failure, kind separation, grouping",
+      "dependencies": [
+        "CAP-013"
+      ],
+      "limitations": [
+        "defect definitions and their case-id lists are hand-maintained"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-031",
+      "name": "Severity and CWE taxonomy",
+      "stage": "P7",
+      "category": "Risk assessment",
+      "description": "Severity scale with ordering and presentation colours, per-defect CWE attribution, category labels tied to OWASP API classes, and a severity-if-accepted field on each case so risk is pre-declared before the result is known rather than rationalised afterwards.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/findings/register.py, framework/methodology/taxonomy.py",
+      "verification": "unit: ordering, invalid severity rejected",
+      "dependencies": [],
+      "limitations": [
+        "no CVSS vector support; severity assigned by judgement"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-032",
+      "name": "Workbook report generator",
+      "stage": "P8",
+      "category": "Reporting",
+      "description": "Self-contained spreadsheet deliverable: summary sheet with engagement metadata, severity counts and execution status; findings register with description, impact, recommendation, CWE and a PoC hyperlink; a PoC sheet with images embedded one block per finding; and a full test log of every case with executed/blocked/result so coverage is auditable.",
+      "status": "partially_reconstructed",
+      "implemented_in": "framework/reporting/renderers/xlsx.py",
+      "verification": "unit+runtime: four sheets written and re-read; image embedding NOT VERIFIED (Pillow absent)",
+      "dependencies": [
+        "openpyxl (present)",
+        "Pillow for image embedding (absent)"
+      ],
+      "limitations": [
+        "image embedding needs Pillow; single layout"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-033",
+      "name": "Assessment report structure",
+      "stage": "P8",
+      "category": "Documentation",
+      "description": "A report skeleton that encodes assessment honesty: how the verdict was decided; results; where the client's own status column does not hold; per-finding detail; residual and newly discovered issues; controls that improved and are not in the issue log; coverage limitations stating explicitly what the run did NOT establish; scope note; evidence index.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/reporting/model.py, templates/report-skeleton.md",
+      "verification": "unit: mandatory-section gate",
+      "dependencies": [],
+      "limitations": [
+        "prose authored per engagement"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-034",
+      "name": "Coverage and honesty accounting",
+      "stage": "P8",
+      "category": "Assessment integrity",
+      "description": "Explicit accounting of executed vs blocked vs skipped cases, a stated coverage percentage, and a written list of what the assessment did not establish, including which remediation items are not externally testable (documentation, internal process) versus not met. Distinguishes observable behaviour from implementation claims, and risk acceptance from remediation.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/findings/coverage.py",
+      "verification": "unit: arithmetic excludes blocked; empty not-established fails",
+      "dependencies": [
+        "CAP-030"
+      ],
+      "limitations": [
+        "partly narrative"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-035",
+      "name": "Operator runbook pattern",
+      "stage": "P0",
+      "category": "Operational knowledge",
+      "description": "Task-oriented operator documentation: layout, one-line usage per workflow, environment overrides, how to inspect versus manipulate traffic, the fastest iteration loop, how to configure client certificates inside the proxy rather than in the HTTP client, and how to drive the same flow from a GUI client.",
+      "status": "fully_reconstructed",
+      "implemented_in": "docs/USAGE.md, templates/engagement-runbook.md",
+      "verification": "reviewed; runbook template shipped",
+      "dependencies": [],
+      "limitations": [
+        "written for one proxy and one target"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-036",
+      "name": "Blocker analysis pattern",
+      "stage": "P0",
+      "category": "Troubleshooting",
+      "description": "A structured way to record a blocked capability: what works (with verification evidence), what does not and why (with the observed evidence that proves it), the root cause, the one-time unblock with its exact steps and cost, and the degraded fallback if permission is never granted. Prevents repeated rediscovery and lets the operator choose a path.",
+      "status": "fully_reconstructed",
+      "implemented_in": "templates/blocker-record.md, docs/KNOWN-LIMITATIONS.md",
+      "verification": "reviewed",
+      "dependencies": [],
+      "limitations": [
+        "none"
+      ],
+      "priority": "P2"
+    },
+    {
+      "id": "CAP-037",
+      "name": "Engagement target model",
+      "stage": "P1",
+      "category": "Configuration",
+      "description": "Machine-readable description of the assessment surface: endpoints with human names and URLs, the identifier each endpoint expects (and that the same request field can mean a different identifier type per endpoint - a rich source of binding defects), request body templates per endpoint, and proxy client-certificate wiring.",
+      "status": "fully_reconstructed",
+      "implemented_in": "configs/schemas/target-profile.schema.json, framework/core/profile.py",
+      "verification": "unit: schema accept/reject, cross-references, secret refusal",
+      "dependencies": [],
+      "limitations": [
+        "flat; no auth-flow or schema description; no OpenAPI ingestion"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-038",
+      "name": "Single-request operator CLI",
+      "stage": "P3",
+      "category": "Execution",
+      "description": "One-shot request helper with positional endpoint/account/body arguments, environment overrides for proxy, base URL and extra client args, timestamped transcript output and a status/time/size summary line - the fast manual loop beside the automated corpus.",
+      "status": "fully_reconstructed",
+      "implemented_in": "automation/cli/main.py",
+      "verification": "runtime: full CLI workflow exercised end to end",
+      "dependencies": [
+        "curl"
+      ],
+      "limitations": [
+        "shell implementation duplicates transport logic"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-039",
+      "name": "Full endpoint-by-identity matrix run",
+      "stage": "P3",
+      "category": "Execution",
+      "description": "Cartesian execution of every endpoint against every credential identity, the baseline authentication/authorization sweep.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/corpus/generators/families.py:family_j, phases.py:phase_1/2",
+      "verification": "unit: every endpoint x identity covered",
+      "dependencies": [
+        "CAP-001",
+        "CAP-002"
+      ],
+      "limitations": [
+        "no parallelism; fixed dimensions"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-040",
+      "name": "Proxy CA trust bootstrap",
+      "stage": "P0",
+      "category": "Environment preparation",
+      "description": "Fetch the intercepting proxy's CA certificate from its own control endpoint, convert to PEM, and verify subject and expiry, so the client can verify the proxy strictly instead of disabling verification. Paired with a live-vs-on-disk fingerprint comparison that detects a regenerated CA.",
+      "status": "fully_reconstructed",
+      "implemented_in": "tools/proxy/ca.py",
+      "verification": "unit: PEM conversion and fingerprint comparison logic",
+      "dependencies": [
+        "curl",
+        "openssl"
+      ],
+      "limitations": [
+        "control-endpoint URL is proxy-product specific"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-041",
+      "name": "Headline-evidence selection",
+      "stage": "P6",
+      "category": "Reporting",
+      "description": "For each finding, nominate the single case that best evidences the verdict, so a report carries one decisive PoC per finding instead of dozens of near-duplicates, with an index recording case, finding, capture mode, path and whether selection was deterministic.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/findings/register.py:headline_case/headline_index, automation/cli/main.py:cmd_capture",
+      "verification": "unit: detector-hit precedence, decisiveness ordering, stability, empty entry",
+      "dependencies": [
+        "CAP-030"
+      ],
+      "limitations": [
+        "headline chosen by hand"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-042",
+      "name": "Authored-plus-machine finding merge",
+      "stage": "P7",
+      "category": "Finding classification",
+      "description": "Combine human-authored findings (carrying narrative, impact and recommendation) with machine-flagged results from the classifier, promoting machine findings into the register under their own id namespace so both are reported without conflating their provenance.",
+      "status": "fully_reconstructed",
+      "implemented_in": "framework/findings/register.py",
+      "verification": "unit: merge, provenance preservation, grouping",
+      "dependencies": [
+        "CAP-030"
+      ],
+      "limitations": [
+        "no dedup between an authored finding and the machine result that evidences it"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-043",
+      "name": "Client-certificate readiness checks",
+      "stage": "P0",
+      "category": "Environment preparation",
+      "description": "Verify client-certificate material before an engagement starts: the PKCS#12 opens with its password, the p12 and the PEM pair agree, the certificate is unexpired, and mutual TLS is actually active through the proxy rather than merely configured.",
+      "status": "not_reconstructed",
+      "implemented_in": null,
+      "verification": "none",
+      "dependencies": [
+        "openssl"
+      ],
+      "limitations": [
+        "the preflight gate has no client-certificate check at all, so an mTLS blocker surfaces as a confusing target.oracle failure"
+      ],
+      "priority": "P0"
+    },
+    {
+      "id": "CAP-044",
+      "name": "Proxy CA trust bootstrap from the CLI",
+      "stage": "P0",
+      "category": "Environment preparation",
+      "description": "Fetch the intercepting proxy's CA from its control endpoint and install it so the client verifies the proxy strictly instead of disabling verification.",
+      "status": "partially_reconstructed",
+      "implemented_in": "tools/proxy/ca.py",
+      "verification": "unit: fingerprint comparison",
+      "dependencies": [
+        "curl",
+        "openssl"
+      ],
+      "limitations": [
+        "library-only: ca.fetch() is called from nowhere, and the probe/control URLs cannot be set from the CLI, so strict CA verification is unreachable in practice"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-045",
+      "name": "Untrusted client-certificate generation",
+      "stage": "P3",
+      "category": "Execution",
+      "description": "Generate a self-signed client certificate so the chain-validation positive control can run: a server that answers a self-signed certificate differently from no certificate is validating the issuing chain, not merely presence.",
+      "status": "not_reconstructed",
+      "implemented_in": null,
+      "verification": "none",
+      "dependencies": [
+        "openssl"
+      ],
+      "limitations": [
+        "client_cert_enforcement accepts untrusted_cert/untrusted_key but nothing in the tree creates the pair"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-046",
+      "name": "Multi-path transport enforcement sweep",
+      "stage": "P3",
+      "category": "Execution",
+      "description": "Probe transport controls across several paths and a plaintext port, to evidence that an edge control is applied uniformly rather than inferring it from one route.",
+      "status": "partially_reconstructed",
+      "implemented_in": "framework/modules/tls_posture.py",
+      "verification": "unit: gate enforcement",
+      "dependencies": [
+        "curl",
+        "openssl"
+      ],
+      "limitations": [
+        "client_cert_enforcement probes a single URL; no multi-path sweep and no plaintext-downgrade check"
+      ],
+      "priority": "P2"
+    },
+    {
+      "id": "CAP-047",
+      "name": "Client issue-log annotation",
+      "stage": "P8",
+      "category": "Reporting",
+      "description": "Write re-validation verdicts back into the workbook the client supplied, as added columns with per-verdict colouring, preserving their rows and identifiers. On a retest this annotated workbook is the artifact the client signs off.",
+      "status": "not_reconstructed",
+      "implemented_in": null,
+      "verification": "none",
+      "dependencies": [
+        "openpyxl"
+      ],
+      "limitations": [
+        "the framework renders only its own workbook; it cannot ingest or annotate a client-supplied one"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-048",
+      "name": "Re-validation verdict vocabulary",
+      "stage": "P9",
+      "category": "Re-validation",
+      "description": "Grade each prior finding on retest -- fixed, fixed with mitigation, fixed but only observably, partially fixed, or open -- with residual-risk items and a map from each remediation item to the findings it addresses.",
+      "status": "not_reconstructed",
+      "implemented_in": null,
+      "verification": "none",
+      "dependencies": [],
+      "limitations": [
+        "the register vocabulary (DEFECT/UNRESOLVED/CONTROL) is first-assessment shaped; retest items are typed for testability but carry no verdict"
+      ],
+      "priority": "P1"
+    },
+    {
+      "id": "CAP-049",
+      "name": "Target profile importer",
+      "stage": "P1",
+      "category": "Target modelling",
+      "description": "Bootstrap a target profile from a machine-readable API description (collection export or OpenAPI document): endpoints, payload templates and identifier spaces, leaving credentials as ${ENV:...} placeholders.",
+      "status": "not_reconstructed",
+      "implemented_in": null,
+      "verification": "none",
+      "dependencies": [],
+      "limitations": [
+        "profiles are written by hand; this is the largest per-engagement setup cost"
+      ],
+      "priority": "P2"
+    }
+  ]
+}

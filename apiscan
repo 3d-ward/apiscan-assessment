@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# apiscan -- framework entry point.
+# Resolves the framework root from this script's own location so it works from
+# any working directory and through a symlink on PATH.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+exec "${APISCAN_PYTHON:-python3}" "$here/automation/cli/main.py" "$@"
