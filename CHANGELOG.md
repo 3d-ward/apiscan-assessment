@@ -145,7 +145,7 @@ an explicit `--latest`.
 * `RELEASE.md`, `.github/workflows/ci.yml` (Linux/macOS/Windows x CPython
   3.9-3.13), `framework/environment.py` and `apiscan version`.
 
-**Test results.** 390 tests. Verified locally on macOS 14 (Darwin 24.6.0,
+**Test results.** 391 tests. Verified locally on macOS 14 (Darwin 24.6.0,
 x86_64):
 
 | Interpreter | Result | Skips | Optional dependencies present |
@@ -164,6 +164,31 @@ Windows, are covered by `.github/workflows/ci.yml` but were not executed on the
 machine that produced this entry -- 3.9, 3.10, 3.12 and 3.13 were not installed
 on it. The code contains no syntax newer than 3.9, but that is an inspection,
 not a test result. Treat the matrix as verified only once CI has run it.
+
+**What CI then found.** The matrix was executed for the first time on
+2026-10-13 (run 38363826055). Linux and macOS passed on CPython 3.9-3.13, as
+did the `hygiene` and `degraded` jobs. **All five Windows jobs failed**, on two
+defects that only a non-POSIX host exposes, both fixed in this entry:
+
+1. `automation/maintenance/intake.py` normalised candidate paths with
+   `os.path.normpath`, which returns backslash-separated paths on Windows, so
+   the engagement-artifact-directory screen in `gate_isolation` split on "/",
+   saw `evidence\x.txt` as a single component, and **failed open** -- on that
+   platform an intake could write into an artifact directory the gate exists
+   to protect. Normalisation now goes through `posixpath`, so the gate behaves
+   identically regardless of the host it runs on. Regression test:
+   `test_the_artifact_directory_screen_is_separator_agnostic`, which asserts
+   the normalised form rather than one platform's verdict.
+2. `tests/integration/test_cli.py` asserted mode `0o600` on the scaffolded
+   `.env` unconditionally, and Windows reported `0o666`. POSIX modes are not
+   meaningful there, which this file already says, so the assertion now skips
+   on `os.name == "nt"` using the convention already in
+   `tests/regression/test_review_defects.py`. The scaffolded files are still
+   asserted to exist on every platform.
+
+The first of those is the reason the Windows row of the matrix is worth having:
+it was a scope-adjacent guard that was weaker on one platform than its tests
+claimed, and no amount of green on Linux and macOS would have shown it.
 
 **Known limitations.** See `docs/KNOWN-LIMITATIONS.md`.
 

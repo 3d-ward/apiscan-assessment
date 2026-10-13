@@ -131,6 +131,25 @@ class TestImprovementIntake(unittest.TestCase):
             self.candidate(files={"evidence/x.txt": "x"}), ROOT)
         self.assertEqual(result.status, intake.FAIL)
 
+    def test_the_artifact_directory_screen_is_separator_agnostic(self):
+        """Regression, first Windows CI run of 1.1.0.
+
+        The screen normalised with ``os.path.normpath``, which returns
+        BACKSLASH-separated paths on Windows, so splitting on "/" saw
+        ``evidence\\x.txt`` as a single component and the gate failed OPEN
+        there. Asserting the normalised FORM rather than one platform's
+        gate verdict is what makes this test fail on the host that had the
+        bug.
+        """
+        for spelling in ("evidence/x.txt", "evidence\\x.txt",
+                         "./evidence/x.txt", "reports/../evidence/x.txt"):
+            self.assertEqual(intake._normalise(spelling).split("/")[0],
+                             "evidence", spelling)
+            self.assertEqual(
+                intake.gate_isolation(
+                    self.candidate(files={spelling: "x"}), ROOT).status,
+                intake.FAIL, spelling)
+
     def test_a_normal_path_passes(self):
         self.assertEqual(intake.gate_isolation(self.candidate(), ROOT).status,
                          intake.PASS)

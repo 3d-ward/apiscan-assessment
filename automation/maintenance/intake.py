@@ -18,6 +18,7 @@ Three properties are deliberate and are enforced here rather than trusted:
 import datetime
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -69,6 +70,21 @@ class Candidate(object):
         self.source_engagement = source_engagement
 
 
+def _normalise(rel):
+    """A candidate path as "/"-separated components, on every platform.
+
+    ENGINEERING IMPROVEMENT (first Windows CI run of 1.1.0). This used
+    ``os.path.normpath``, which returns BACKSLASH-separated paths on Windows --
+    so ``normalised.split("/")[0]`` saw the whole of ``evidence\\x.txt`` as one
+    component and the engagement-artifact-directory screen in
+    ``gate_isolation`` failed OPEN on that platform. A candidate path is
+    framework-relative and always written with "/", so normalise it with
+    ``posixpath`` and get identical behaviour everywhere rather than behaviour
+    that depends on the host the gate happens to run on.
+    """
+    return posixpath.normpath(str(rel).replace("\\", "/"))
+
+
 # -- gates ---------------------------------------------------------------
 def gate_isolation(candidate, framework):
     """G1: the candidate must not write outside the framework or into the
@@ -85,7 +101,7 @@ def gate_isolation(candidate, framework):
         except PathGuardError as exc:
             bad.append("%s: %s" % (rel, exc))
             continue
-        normalised = os.path.normpath(str(rel).replace("\\", "/"))
+        normalised = _normalise(rel)
         for pattern in PROTECTED_PATTERNS:
             if pattern in normalised:
                 bad.append("%s: targets a protected path (%s)" % (rel, pattern))

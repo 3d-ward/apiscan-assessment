@@ -71,6 +71,8 @@ class TestScaffolding(CLIBase):
         for name in ("profile.json", "scope-policy.json", ".env",
                      ".gitignore"):
             self.assertTrue(os.path.exists(os.path.join(self.eng, name)), name)
+        if os.name == "nt":
+            self.skipTest("POSIX modes are not meaningful on this platform")
         mode = os.stat(os.path.join(self.eng, ".env")).st_mode & 0o777
         self.assertEqual(mode, 0o600)
 
