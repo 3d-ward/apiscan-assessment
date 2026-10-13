@@ -3,38 +3,51 @@
 ## Data flow
 
 ```
- target profile (JSON)          scope policy (JSON)
-        |                              |
-        v                              v
-  profile loader  ------------->  ScopePolicy
-  (schema + secret refusal)            |
-        |                              |
-        v                              |
-   generators  -->  Corpus  ----->  scope gate  (denied cases are RECORDED,
-   families A-J                         |        not silently dropped)
-   phases P1-P7                         v
-   retest / followup                Transport (curl)
-                                        |
-                                        v
-                                 EvidenceStore  (req / resp / trace,
-                                        |        SHA-256 manifest)
-                                        v
-                                layer attribution
-                                        |
-                                        v
-                              expectation x layer
-                                        |
-                                        v
-                                    verdict + detectors
-                                        |
-                                        v
-                        Register (DEFECT / UNRESOLVED / CONTROL)
-                                        |
-                                        v
-                             Coverage (honesty gates)
-                                        |
-                                        v
-                        ReportModel -> markdown / csv / xlsx
+ target profile (JSON)     scope policy (JSON)    engagement mode (--mode)
+        |                          |                       |
+        v                          v                       |
+  profile loader  ----------> ScopePolicy <----------------+
+  (schema + secret refusal)        |      (mode narrows it; its refusals
+        |                          |       cannot be lifted by an
+        v                          |       authorisation)
+   generators  -->  Corpus  --> test plan  (destination, identities, request
+   families A-J                     |       count, every data-changing op --
+   phases P1-P7                     |       shown and confirmed BEFORE a
+   retest / followup                |       socket opens)
+                                    v
+                        Transport (curl) + THE GATE
+                                    |      (the gate is inside the transport,
+                                    |       which cannot be constructed
+                                    |       without a policy -- so no command
+                                    |       reaches the network around it.
+                                    |       Denied cases are RECORDED, never
+                                    |       silently dropped. Headers and body
+                                    |       are read from separate streams.)
+                                    |
+                                    v
+                         EvidenceStore  (req / resp / trace, mode 0600,
+                                    |     SHA-256 manifest, retention date;
+                                    |     `redact` makes a shareable COPY and
+                                    |     never touches the original)
+                                    v
+                            layer attribution
+                                    |
+                                    v
+                          expectation x layer
+                                    |
+                                    v
+                            verdict + detectors
+                                    |
+                                    v
+                    Register (DEFECT / UNRESOLVED / CONTROL,
+                              each with a confidence level)
+                                    |
+                                    v
+                        Coverage (honesty gates)
+                                    |
+                                    v
+                    ReportModel -> markdown / csv / xlsx
+                        (target text neutralised on the way in)
 ```
 
 ## Components
