@@ -79,9 +79,12 @@ class TestScaffolding(CLIBase):
         self.assertEqual(scope["authorisations"], [],
                          "a freshly scaffolded engagement must authorise "
                          "nothing")
-        for klass in ("state_mutating", "volumetric", "destructive",
-                      "infrastructure_pivot", "bulk_extraction"):
-            self.assertIn(klass, scope["deny_classes"])
+        from framework.governance.scope import DEFAULT_DENY
+        for klass in DEFAULT_DENY:
+            self.assertIn(klass, scope["deny_classes"],
+                          "the scaffold must deny every class the framework "
+                          "considers default-denied, including the payload "
+                          "classes that can damage a vulnerable target")
 
     def test_refuses_to_scaffold_inside_the_framework(self):
         """The CLI converts a FrameworkError into exit code 2 rather than a
@@ -128,9 +131,13 @@ class TestNonSendingCommands(CLIBase):
 
 class TestFullWorkflow(CLIBase):
     def test_scan_report_capture_reclassify(self):
+        # --mode active: this test exercises the whole pipeline, which is
+        # what an authorised assessment does. The cautious default mode is
+        # covered by its own tests in tests/regression.
         rc = main(["scan", "--profile", self.profile_path, "--scope",
                    self.scope_path, "--evidence", self.evidence,
                    "--phases", "P1,P2", "--families", "A,B", "--quiet",
+                   "--mode", "active", "--yes",
                    "--note", "cli integration test"])
         self.assertEqual(rc, 0)
 
@@ -148,13 +155,13 @@ class TestFullWorkflow(CLIBase):
         from tests.fixtures.mock_service import STATE
         before = STATE.requests
         self.assertEqual(main(["reclassify", "--profile", self.profile_path,
-                               "--evidence", self.evidence]), 0)
+                               "--evidence", self.evidence, "--latest"]), 0)
         self.assertEqual(STATE.requests, before)
 
         # report: without --not-established it is NOT issuable (exit 1)
         reports = os.path.join(self.eng, "reports")
         rc = main(["report", "--evidence", self.evidence, "--out", reports,
-                   "--promote", "--no-xlsx"])
+                   "--promote", "--no-xlsx", "--latest"])
         self.assertEqual(rc, 1, "a report with no limitations must not be "
                                 "reported as issuable")
 
@@ -162,7 +169,8 @@ class TestFullWorkflow(CLIBase):
         with open(limits, "w") as fh:
             fh.write("TLS was not assessed.\nRate limiting was out of scope.\n")
         rc = main(["report", "--evidence", self.evidence, "--out", reports,
-                   "--promote", "--no-xlsx", "--not-established", limits,
+                   "--promote", "--no-xlsx", "--latest",
+                   "--not-established", limits,
                    "--scope-note", "Loopback mock only.",
                    "--engagement", "TEST-0001"])
         self.assertEqual(rc, 0)
@@ -177,7 +185,7 @@ class TestFullWorkflow(CLIBase):
         with open(os.path.join(run_dir, "results.json")) as fh:
             first_case = json.load(fh)[0]
         self.assertEqual(main(["capture", "--evidence", self.evidence,
-                               "--out", poc, "--ids",
+                               "--out", poc, "--latest", "--ids",
                                first_case["case_id"]]), 0)
         self.assertEqual(STATE.requests, before)
         self.assertTrue(any(f.endswith(".html") for f in os.listdir(poc)))
@@ -185,7 +193,8 @@ class TestFullWorkflow(CLIBase):
     def test_evidence_root_inside_the_framework_is_refused(self):
         rc = main(["scan", "--profile", self.profile_path, "--scope",
                    self.scope_path, "--evidence",
-                   os.path.join(FRAMEWORK_ROOT, "evidence"), "--quiet"])
+                   os.path.join(FRAMEWORK_ROOT, "evidence"), "--quiet",
+                   "--mode", "active", "--yes"])
         self.assertEqual(rc, 2)
         self.assertFalse(os.path.exists(os.path.join(FRAMEWORK_ROOT,
                                                      "evidence")))
@@ -207,7 +216,8 @@ class TestOfflineCommandsNeedNoCredentials(CLIBase):
         super(TestOfflineCommandsNeedNoCredentials, cls).setUpClass()
         rc = main(["scan", "--profile", cls.profile_path,
                    "--scope", cls.scope_path, "--evidence", cls.evidence,
-                   "--phases", "P1", "--direct", "--quiet"])
+                   "--phases", "P1", "--direct", "--quiet",
+                   "--mode", "active", "--yes"])
         assert rc == 0, rc
 
     def _without_credentials(self, argv):
@@ -220,7 +230,7 @@ class TestOfflineCommandsNeedNoCredentials(CLIBase):
     def test_reclassify_runs_with_no_credentials_in_the_environment(self):
         rc = self._without_credentials(
             ["reclassify", "--profile", self.profile_path,
-             "--evidence", self.evidence])
+             "--evidence", self.evidence, "--latest"])
         self.assertEqual(rc, 0, "reclassify must not require live credentials")
 
     def test_reclassify_still_sends_nothing(self):
@@ -230,7 +240,7 @@ class TestOfflineCommandsNeedNoCredentials(CLIBase):
         with contextlib.redirect_stdout(buf):
             self._without_credentials(
                 ["reclassify", "--profile", self.profile_path,
-                 "--evidence", self.evidence])
+                 "--evidence", self.evidence, "--latest"])
         self.assertIn("No request was sent.", buf.getvalue())
 
     def test_scanning_without_credentials_is_still_refused(self):
@@ -238,7 +248,7 @@ class TestOfflineCommandsNeedNoCredentials(CLIBase):
         rc = self._without_credentials(
             ["scan", "--profile", self.profile_path, "--scope",
              self.scope_path, "--evidence", self.evidence, "--phases", "P1",
-             "--direct", "--quiet"])
+             "--direct", "--quiet", "--mode", "active", "--yes"])
         self.assertNotEqual(rc, 0,
                             "scan must still demand resolved credentials")
 
@@ -267,9 +277,16 @@ class TestTlsPostureCommand(CLIBase):
 
     def test_it_runs_and_writes_direct_stamped_evidence(self):
         out = os.path.join(self.tmp, "tls-evidence")
+        scope = self._scope("allow-probe.json", {
+            "schema": "scope-policy/1",
+            "deny_classes": ["state_mutating", "volumetric"],
+            "authorisations": [{
+                "classes": ["transport_probe", "direct_transport"],
+                "authorised_by": "Test", "authorised_on": "2026-10-06",
+                "reference": "SELFTEST"}]})
         rc = main(["tls-posture",
                    "--profile", self._profile_at("https://127.0.0.1:1/v1"),
-                   "--evidence", out, "--quiet"])
+                   "--scope", scope, "--evidence", out, "--quiet"])
         self.assertEqual(rc, 0)
         runs = [d for d in os.listdir(out)
                 if os.path.isdir(os.path.join(out, d))]

@@ -42,9 +42,19 @@ class Coverage(object):
 
     # -- arithmetic ------------------------------------------------------
     def tally(self):
+        from ..runner import NOT_REACHED
         recs = self.records
         executed = [r for r in recs if r.get("executed")]
-        skipped = [r for r in recs if not r.get("executed")]
+        unexecuted = [r for r in recs if not r.get("executed")]
+        # A case the engagement excluded and a case the run never got to are
+        # both "not executed", and they mean opposite things about the
+        # assessment. Counting them together would let a run that stopped on
+        # its third consecutive 500 report the same coverage as one the client
+        # deliberately narrowed.
+        not_reached = [r for r in unexecuted
+                       if r.get("verdict") == NOT_REACHED]
+        skipped = [r for r in unexecuted
+                   if r.get("verdict") != NOT_REACHED]
         blocked = [r for r in executed if r.get("verdict") == V.BLOCKED]
         errored = [r for r in executed if r.get("verdict") == V.ERROR]
         unclear = [r for r in executed if r.get("verdict") == V.UNCLEAR]
@@ -59,6 +69,7 @@ class Coverage(object):
             "planned": self.planned,
             "executed": len(executed),
             "skipped_out_of_scope": len(skipped),
+            "not_reached_run_stopped": len(not_reached),
             "blocked_before_application": len(blocked),
             "errored": len(errored),
             "unclear": len(unclear),
@@ -92,6 +103,10 @@ class Coverage(object):
         t = self.tally()
         if self.baseline_ok is False:
             return "INCONCLUSIVE"
+        if t["not_reached_run_stopped"]:
+            # The run stopped early. Whatever it found may be sound, but the
+            # assessment is not complete and must not read as though it were.
+            return "INCOMPLETE"
         if t["executed"] == 0:
             return "NOT EXECUTED"
         if t["conclusive"] == 0:
@@ -127,6 +142,12 @@ class Coverage(object):
                 "%d case(s) declared legitimate were refused (OVER-BLOCKED); "
                 "explain this before relying on the negative results"
                 % t["over_blocked"])
+        if t["not_reached_run_stopped"]:
+            problems.append(
+                "%d case(s) were never sent because the run hit a ceiling or "
+                "a stop condition; the assessment is incomplete and the "
+                "untested cases must be listed as not established"
+                % t["not_reached_run_stopped"])
         return problems
 
     # -- matrices --------------------------------------------------------

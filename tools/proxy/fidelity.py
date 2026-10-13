@@ -22,6 +22,8 @@ useful than refusing to proceed.
 """
 import json
 
+from framework.core.errors import ScopeViolation
+
 PROBE_LARGE_BODY = "large_body"
 PROBE_NUL_BYTE = "nul_byte"
 PROBE_DUPLICATE_HEADER = "duplicate_header"
@@ -63,13 +65,39 @@ class ProbeResult(object):
 
 
 def _send_both(transport, url, case_id, body, content_type="application/json",
-               header_overrides=None):
+               header_overrides=None, payload_class="benign", endpoint=None):
+    """Send one probe body down both paths, each gated in its own right.
+
+    ENGINEERING IMPROVEMENT (review finding: "apply scope checks to every
+    network request"). A fidelity probe is a 200 KB body, a NUL byte or a
+    truncated JSON document sent to the client's endpoint. It is exactly the
+    kind of traffic a scope policy exists to govern, and it used to go out
+    without consulting one.
+
+    The two paths are declared separately because they differ in the thing a
+    policy cares about: the direct probe leaves the recorded proxy path, so a
+    policy with ``require_proxy`` must see it and demand a
+    ``direct_transport`` authorisation.
+    """
+    from framework.governance.scope import Probe
+    direct_probe = Probe(case_id + "-direct", endpoint=endpoint,
+                         method="POST", state_mutating=True,
+                         payload_class=payload_class, use_proxy=False,
+                         risk_classes=["fidelity_probe"],
+                         description="fidelity probe, direct path")
+    proxied_probe = Probe(case_id + "-proxied", endpoint=endpoint,
+                          method="POST", state_mutating=True,
+                          payload_class=payload_class, use_proxy=True,
+                          risk_classes=["fidelity_probe"],
+                          description="fidelity probe, proxied path")
     direct = transport.send(case_id + "-direct", url, body=body,
                             content_type=content_type,
-                            header_overrides=header_overrides, use_proxy=False)
+                            header_overrides=header_overrides,
+                            use_proxy=False, probe=direct_probe)
     proxied = transport.send(case_id + "-proxied", url, body=body,
                              content_type=content_type,
-                             header_overrides=header_overrides, use_proxy=True)
+                             header_overrides=header_overrides,
+                             use_proxy=True, probe=proxied_probe)
     return direct, proxied
 
 
@@ -105,7 +133,9 @@ def probe_large_body(profile, transport, endpoint_id, expected_status=None,
     """
     url = profile.url_for(endpoint_id)
     body = _build_body(profile, endpoint_id, pad_size=size)
-    direct, proxied = _send_both(transport, url, "fid-large", body)
+    direct, proxied = _send_both(transport, url, "fid-large", body,
+                                 payload_class="oversize",
+                                 endpoint=endpoint_id)
     agree = direct.status == proxied.status
     if not direct.ok_transport and not proxied.ok_transport:
         return ProbeResult(PROBE_LARGE_BODY, direct.status, proxied.status,
@@ -139,7 +169,9 @@ def probe_nul_byte(profile, transport, endpoint_id, expected_status=None):
     """Does an escaped NUL reach the application unaltered?"""
     url = profile.url_for(endpoint_id)
     body = _build_body(profile, endpoint_id, inject_nul=True)
-    direct, proxied = _send_both(transport, url, "fid-nul", body)
+    direct, proxied = _send_both(transport, url, "fid-nul", body,
+                                 payload_class="malformed",
+                                 endpoint=endpoint_id)
     agree = direct.status == proxied.status
     verdict = "PASS" if agree else "FAIL"
     detail = ("both paths returned HTTP %s; control characters survive the "
@@ -164,7 +196,9 @@ def probe_duplicate_header(profile, transport, endpoint_id):
     body = _build_body(profile, endpoint_id)
     overrides = {"X-APIScan-Fidelity": ["first", "second"]}
     direct, proxied = _send_both(transport, url, "fid-dup", body,
-                                 header_overrides=overrides)
+                                 header_overrides=overrides,
+                                 payload_class="auth",
+                                 endpoint=endpoint_id)
     agree = direct.status == proxied.status
     return ProbeResult(
         PROBE_DUPLICATE_HEADER, direct.status, proxied.status, None, agree,
@@ -182,7 +216,9 @@ def probe_malformed_json(profile, transport, endpoint_id):
     """Is a truncated body forwarded without repair?"""
     url = profile.url_for(endpoint_id)
     body = _build_body(profile, endpoint_id, malformed=True)
-    direct, proxied = _send_both(transport, url, "fid-malformed", body)
+    direct, proxied = _send_both(transport, url, "fid-malformed", body,
+                                 payload_class="malformed",
+                                 endpoint=endpoint_id)
     agree = direct.status == proxied.status
     return ProbeResult(
         PROBE_MALFORMED_JSON, direct.status, proxied.status, None, agree,
@@ -211,22 +247,39 @@ def verify(profile, transport, endpoint_id=None, probes=None):
     results = []
     for name in wanted:
         fn = ALL_PROBES[name]
-        if name == PROBE_LARGE_BODY:
-            results.append(fn(profile, transport, endpoint_id,
-                              expected_status=expectations.get(
-                                  "large_body_status"),
-                              size=expectations.get("large_body_bytes",
-                                                    200000)))
-        elif name == PROBE_NUL_BYTE:
-            results.append(fn(profile, transport, endpoint_id,
-                              expected_status=expectations.get(
-                                  "nul_byte_status")))
-        else:
-            results.append(fn(profile, transport, endpoint_id))
+        try:
+            if name == PROBE_LARGE_BODY:
+                results.append(fn(profile, transport, endpoint_id,
+                                  expected_status=expectations.get(
+                                      "large_body_status"),
+                                  size=expectations.get("large_body_bytes",
+                                                        200000)))
+            elif name == PROBE_NUL_BYTE:
+                results.append(fn(profile, transport, endpoint_id,
+                                  expected_status=expectations.get(
+                                      "nul_byte_status")))
+            else:
+                results.append(fn(profile, transport, endpoint_id))
+        except ScopeViolation as exc:
+            # The engagement has not authorised this probe. Report it as NOT
+            # VERIFIED rather than letting it fail the preflight: the probe's
+            # job is to tell the operator which payload classes are
+            # dependable, and "we were not permitted to find out" is a
+            # truthful answer to that. What it must never be is a PASS.
+            results.append(ProbeResult(
+                name, None, None, None, None, "NOT VERIFIED",
+                "not sent: %s" % str(exc)[:300],
+                UNDERWRITES[name]))
 
+    # A probe that FAILED proves the proxy alters that class. A probe that was
+    # NOT VERIFIED -- not authorised, or no response on either path -- proves
+    # nothing either way, and an unproven assumption of fidelity is exactly
+    # what this module exists to stop. Both go into the list the report draws
+    # its "cannot be trusted" statement from; the per-probe verdict
+    # distinguishes them for anyone reading the detail.
     unreliable = set()
     for r in results:
-        if r.verdict == "FAIL":
+        if r.verdict in ("FAIL", "NOT VERIFIED"):
             unreliable.update(r.underwrites)
     return results, sorted(unreliable)
 

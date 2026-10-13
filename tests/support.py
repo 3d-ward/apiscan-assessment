@@ -79,3 +79,45 @@ class FakeResponse(object):
             if ":" in line and line.split(":", 1)[0].strip().lower() == want:
                 return line.split(":", 1)[1].strip()
         return None
+
+
+def test_scope(classes=None, endpoints=None, require_proxy=False,
+               deny_classes=None, mode=None):
+    """A scope policy fixture that AUTHORISES rather than bypasses.
+
+    Every request the framework sends passes the scope gate, so a test that
+    sends anything needs a policy. The important property of this helper is
+    what it does not do: there is no "permit everything" switch anywhere in
+    the framework, so the fixture has to record an authorisation exactly as an
+    engagement does -- classes, who approved it, when, and against what
+    reference. A test therefore exercises the real gate on the real path.
+
+    The reference names this file, which is truthful: the approval is for a
+    synthetic loopback mock and authorises nothing against any real host.
+    """
+    from framework.governance.scope import DEFAULT_DENY, ScopePolicy
+    granted = sorted(set(classes or DEFAULT_DENY)
+                     | {"direct_transport", "transport_probe"})
+    spec = {
+        "schema": "scope-policy/1",
+        "description": "Test fixture policy for the loopback mock service.",
+        "deny_classes": list(DEFAULT_DENY if deny_classes is None
+                             else deny_classes),
+        "authorisations": [{
+            "classes": granted,
+            "authorised_by": "apiscan test suite (synthetic fixture)",
+            "authorised_on": "2026-01-01",
+            "reference": ("tests/support.py:test_scope -- the target is a "
+                          "loopback mock owned by this repository; this "
+                          "authorises nothing against any real host"),
+        }],
+    }
+    if endpoints:
+        spec["authorisations"][0]["endpoints"] = list(endpoints)
+    if require_proxy:
+        spec["require_proxy"] = True
+    policy = ScopePolicy(spec)
+    if mode is not None:
+        from framework.governance import modes as M
+        policy = policy.with_mode(M.get(mode))
+    return policy

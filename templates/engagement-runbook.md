@@ -16,15 +16,22 @@ Base URL / endpoints / identities / proxy / client certificate location.
 ```
 set -a; . ./.env; set +a
 ./apiscan validate  --profile ./profile.json --scope ./scope-policy.json
-./apiscan preflight --profile ./profile.json --evidence ./evidence --all
+./apiscan plan      --profile ./profile.json --scope ./scope-policy.json
+./apiscan preflight --profile ./profile.json --scope ./scope-policy.json \
+                    --evidence ./evidence --all   # SENDS gated probes
 ```
 Record the preflight output. Do not proceed past a blocker.
 
 ## Execution order
 ```
-./apiscan scan --phases P1,P2 ...      # authz/authn, non-mutating
-./apiscan scan --up-to P3 ...          # stop before business-logic abuse
-./apiscan scan --families C,D,E ...    # payload families
+./apiscan scan --mode limited-live --phases P1,P2 ...   # cautious, explicit
+./apiscan scan --mode active --up-to P3 ...            # stop before P4+
+./apiscan scan --mode active --families C,D,E ...      # payload families
+
+# Before anything leaves the engagement:
+./apiscan verify --evidence ./evidence --run <run-id>
+./apiscan redact --evidence ./evidence --run <run-id> \
+                 --profile ./profile.json --out ./shareable
 ```
 After each stage: confirm baselines passed. A failed baseline means stop and
 explain before continuing.

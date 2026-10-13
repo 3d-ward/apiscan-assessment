@@ -75,14 +75,21 @@ def gate_isolation(candidate, framework):
     validator, and must not be a file copied out of an engagement."""
     bad = []
     for rel in candidate.files:
-        normalised = os.path.normpath(rel)
-        if os.path.isabs(normalised) or normalised.startswith(".."):
-            bad.append("%s: escapes the framework tree" % rel)
+        # Resolve it rather than pattern-match it: a backslash-separated path
+        # is one opaque component to os.path.normpath on POSIX and escapes on
+        # Windows, so the substring screen below was never sufficient on its
+        # own. The guard canonicalises and proves containment.
+        from framework.core.errors import PathGuardError
+        try:
+            _resolve_in_framework(framework, rel)
+        except PathGuardError as exc:
+            bad.append("%s: %s" % (rel, exc))
             continue
+        normalised = os.path.normpath(str(rel).replace("\\", "/"))
         for pattern in PROTECTED_PATTERNS:
             if pattern in normalised:
                 bad.append("%s: targets a protected path (%s)" % (rel, pattern))
-        top = normalised.split(os.sep)[0]
+        top = normalised.split("/")[0]
         if top in ("evidence", "reports", "poc", "findings", "engagements"):
             bad.append("%s: writes into an engagement artifact directory" % rel)
     if bad:
@@ -255,11 +262,28 @@ def gate_rollback(candidate, framework, snapshot_id):
 
 
 # -- driver --------------------------------------------------------------
+def _resolve_in_framework(framework, rel):
+    """Where *rel* lands, proven to be inside the framework tree.
+
+    ENGINEERING IMPROVEMENT (review finding: "validate resolved file
+    destinations before writing ... cannot escape their intended folders on
+    Windows or Linux"). G1 screened candidate paths with a substring check for
+    ".." on an ``os.path.normpath`` result, which on POSIX does not normalise
+    backslashes at all: ``framework\\..\\..\\etc\\x`` passed the screen as a
+    single harmless-looking component and then escaped when the same candidate
+    was applied on Windows. The destination is now resolved and verified
+    rather than pattern-matched.
+    """
+    sys.path.insert(0, framework)
+    from framework.core.pathguard import safe_relative_join
+    return safe_relative_join(framework, rel, what="candidate file")
+
+
 def _stage(candidate, framework):
     """Write the candidate's files, returning the originals for restoration."""
     originals = {}
     for rel, content in candidate.files.items():
-        full = os.path.join(framework, rel)
+        full = _resolve_in_framework(framework, rel)
         originals[rel] = (open(full).read() if os.path.exists(full) else None)
         os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
         with open(full, "w") as fh:
@@ -269,7 +293,7 @@ def _stage(candidate, framework):
 
 def _unstage(originals, framework):
     for rel, content in originals.items():
-        full = os.path.join(framework, rel)
+        full = _resolve_in_framework(framework, rel)
         if content is None:
             if os.path.exists(full):
                 os.remove(full)

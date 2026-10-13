@@ -11,14 +11,19 @@
     "proxy": "http://127.0.0.1:8080",
     "timeout_s": 45,
     "delay_s": 0.25,
-    "tls_verify": {"mode": "insecure", "ca_path": null},
+    "tls_verify": {
+      "$comment": "The secure default. An engagement running through an intercepting proxy should set mode to 'ca' and point ca_path at the proxy CA fetched from its control endpoint: that verifies the proxy strictly instead of disabling verification. 'insecure' is available but must be chosen deliberately, and the report states it as a limitation.",
+      "mode": "system",
+      "ca_path": null
+    },
     "client_cert": {
       "mode": "none",
       "cert_path": null,
       "key_path": null,
       "note": "Set mode to 'proxy' when the target enforces mutual TLS and the certificate is configured inside the intercepting proxy, because the proxy terminates TLS and performs the upstream handshake. Set 'direct' only for transport-layer evidence captured without the proxy."
     },
-    "extra_args": []
+    "extra_args": [],
+    "max_response_bytes": 8388608
   },
   "auth": {
     "provider": "header_token",
@@ -58,7 +63,9 @@
       "id": "resource_create",
       "name": "Create resource callback",
       "path": "/notify/created",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "identifier_space": "resource_ref",
       "payload_template": "standard"
     },
@@ -66,7 +73,9 @@
       "id": "resource_update",
       "name": "Update resource callback",
       "path": "/notify/updated",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "identifier_space": "resource_ref",
       "payload_template": "standard"
     },
@@ -74,7 +83,9 @@
       "id": "audit_entry",
       "name": "Audit trail callback",
       "path": "/notify/audit-entry",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "identifier_space": "audit_ref",
       "payload_template": "standard"
     },
@@ -82,7 +93,9 @@
       "id": "declaration",
       "name": "Declaration callback",
       "path": "/notify/declaration",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "identifier_space": "declaration_ref",
       "payload_template": "standard"
     }
@@ -125,7 +138,13 @@
       "status_flag_path": "success",
       "error_path": "message.error",
       "note_path": "message.note",
-      "mutable_paths": ["message.key", "message.error", "message.note", "success", "correlationId"]
+      "mutable_paths": [
+        "message.key",
+        "message.error",
+        "message.note",
+        "success",
+        "correlationId"
+      ]
     }
   },
   "response_model": {
@@ -147,8 +166,12 @@
       "code_path": "resultCode",
       "remark_path": "resultMessage",
       "data_path": "errors",
-      "success_values": ["0000"],
-      "auth_failure_values": ["0401"]
+      "success_values": [
+        "0000"
+      ],
+      "auth_failure_values": [
+        "0401"
+      ]
     },
     "edge_block_markers": [
       "No required SSL certificate was sent",

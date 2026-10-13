@@ -209,14 +209,16 @@ class TestReportPipeline(BaseRun):
         ids = [r["case_id"] for r in self.records
                if r.get("family") == "A"][:3]
         register = Register(records=self.records)
-        register.add(Entry("D-01", "t", case_ids=ids))
+        register.add(Entry("D-01", "t", case_ids=ids,
+                           confidence="reproduced"))
         register.build()
         entry = register.entries[0]
         self.assertEqual(entry.occurrences, len(ids))
         self.assertTrue(entry.affected_endpoints)
 
         stale = Register(records=self.records)
-        stale.add(Entry("D-02", "t", case_ids=["NO-SUCH-CASE"]))
+        stale.add(Entry("D-02", "t", case_ids=["NO-SUCH-CASE"],
+                        confidence="reproduced"))
         with self.assertRaises(RegisterError):
             stale.build()
 

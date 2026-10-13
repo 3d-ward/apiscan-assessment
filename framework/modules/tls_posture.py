@@ -226,6 +226,14 @@ def client_cert_enforcement(url, cert_path=None, key_path=None,
     enumeration.
     """
     _gate("tls.client_cert_enforcement", scope_policy, endpoint)
+
+    # Server-certificate verification is deliberately OFF for these three
+    # probes, and the output says so rather than leaving a reader to assume
+    # otherwise. The measurement is whether the EDGE enforces a CLIENT
+    # certificate; a server-trust failure would abort the handshake before
+    # that question is reached, so verifying here would mask the finding
+    # rather than strengthen it. This is the one place in the framework where
+    # -k is correct, which is why it is argued for in writing.
     def probe(args, label):
         cmd = ["curl", "-sS", "-k", "-o", "-", "-w", "<<%{http_code}>>",
                "--max-time", str(timeout)] + args + [url]
@@ -255,6 +263,12 @@ def client_cert_enforcement(url, cert_path=None, key_path=None,
         "probes": results,
         "message_summary": messages,
         "chain_validated": distinct,
+        "server_certificate_verification": (
+            "DISABLED for these probes, deliberately. The measurement is "
+            "whether the edge enforces a client certificate; verifying the "
+            "server's own certificate would abort the handshake before that "
+            "question is reached and would mask the result. This does not "
+            "apply to the HTTP corpus, which verifies by default."),
         "note": ("Captured DIRECT. An intercepting proxy would attach its own "
                  "configured client certificate, so the 'no certificate' probe "
                  "would not reproduce and the application would be reached "

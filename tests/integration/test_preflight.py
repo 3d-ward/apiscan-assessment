@@ -11,7 +11,8 @@ import tempfile
 import unittest
 
 from tests.fixtures.mock_service import MockService
-from tests.support import ROOT, auth_for, load_profile  # noqa: F401
+from tests.support import (ROOT, auth_for, load_profile,  # noqa: F401
+                           test_scope)
 from automation.preflight import checks as PF
 from framework.core.pathguard import FRAMEWORK_ROOT
 from framework.core.transport import Transport
@@ -25,8 +26,13 @@ class TestPreflight(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def ctx(self, profile, **kw):
+        # A scope policy is part of a preflight context now: every networked
+        # check is gated, and a context without one reports NOT VERIFIED
+        # instead of sending. Tests that assert on live checks must therefore
+        # supply one, exactly as an engagement does.
         base = {"profile": profile,
-                "evidence_root": os.path.join(self.tmp, "evidence")}
+                "evidence_root": os.path.join(self.tmp, "evidence"),
+                "scope_policy": kw.pop("scope_policy", test_scope())}
         base.update(kw)
         return base
 
@@ -34,7 +40,8 @@ class TestPreflight(unittest.TestCase):
         with MockService() as svc:
             profile = load_profile(base_url=svc.base_url, proxy=None)
             transport = Transport(profile, auth_for(profile),
-                                  body_dir=self.tmp, via_proxy=False)
+                                  body_dir=self.tmp, via_proxy=False,
+                                  scope_policy=test_scope())
             results, blocked = PF.run(self.ctx(profile, transport=transport),
                                       quiet=True)
             self.assertFalse(blocked)
@@ -46,7 +53,8 @@ class TestPreflight(unittest.TestCase):
         with MockService() as svc:
             profile = load_profile(base_url=svc.base_url, proxy=None)
             transport = Transport(profile, auth_for(profile),
-                                  body_dir=self.tmp, via_proxy=False)
+                                  body_dir=self.tmp, via_proxy=False,
+                                  scope_policy=test_scope())
             results, _ = PF.run(self.ctx(profile, transport=transport),
                                 quiet=True)
             by_id = {r.check_id: r for r in results}
@@ -87,9 +95,11 @@ class TestPreflight(unittest.TestCase):
         with MockService() as svc:
             profile = load_profile(base_url=svc.base_url, proxy=None)
             transport = Transport(profile, auth_for(profile),
-                                  body_dir=self.tmp, via_proxy=False)
+                                  body_dir=self.tmp, via_proxy=False,
+                                  scope_policy=test_scope())
             results, blocked = PF.run(
                 {"profile": profile, "transport": transport,
+                 "scope_policy": test_scope(),
                  "evidence_root": os.path.join(FRAMEWORK_ROOT, "evidence")},
                 stop_on_fail=False, quiet=True)
             by_id = {r.check_id: r for r in results}
@@ -110,7 +120,8 @@ class TestPreflight(unittest.TestCase):
         with MockService() as svc:
             profile = load_profile(base_url=svc.base_url, proxy=None)
             transport = Transport(profile, auth_for(profile),
-                                  body_dir=self.tmp, via_proxy=False)
+                                  body_dir=self.tmp, via_proxy=False,
+                                  scope_policy=test_scope())
             ctx = self.ctx(profile, transport=transport)
             results, _ = PF.run(ctx, quiet=True)
             payload = json.loads(PF.to_json(results, ctx))
@@ -127,7 +138,8 @@ class TestPreflight(unittest.TestCase):
                 if identity.get("headers"):
                     identity["headers"]["x-client-token"] = "wrong"
             transport = Transport(profile, auth_for(profile),
-                                  body_dir=self.tmp, via_proxy=False)
+                                  body_dir=self.tmp, via_proxy=False,
+                                  scope_policy=test_scope())
             results, _ = PF.run(self.ctx(profile, transport=transport),
                                 stop_on_fail=False, quiet=True)
             by_id = {r.check_id: r for r in results}

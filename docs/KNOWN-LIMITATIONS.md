@@ -15,6 +15,10 @@ no-download policy. They are reported `NOT VERIFIED`, not "passing".
 | PoC images embedded in the workbook | `Pillow` | the absence is detected and reported in `RenderResult.notes`; paths are referenced instead |
 | TLS cipher enumeration | `nmap` / `testssl.sh` | the absence returns `NOT VERIFIED` with a remedy, never a clean result. Verify availability on the host you run from -- this table records the *build* environment, not yours |
 
+Run `./apiscan version` on the machine you are assessing from: it reports which
+of these capabilities that host actually has, and what each absence costs. This
+table is about a build; that command is about your run.
+
 Install commands are in `dependencies/README.md`.
 
 ## Scope of the assessment surface
@@ -100,5 +104,64 @@ recovery behaviour -- that would require sustained load.
 * No concurrency within a scan: cases execute sequentially with a configurable
   delay. This is deliberate -- parallel execution against a live target makes
   rate effects and state interactions much harder to reason about.
-* Evidence is not encrypted at rest. Protect the engagement directory with
-  filesystem permissions.
+* **Evidence is not encrypted at rest.** Run directories are created mode 0700
+  and artifacts 0600, and the manifest's `access` block records whether the
+  filesystem actually applied that -- but owner-only permissions are not
+  encryption. Anyone with root, or with the disk, can read it. Protect the
+  engagement directory accordingly, and prefer a full-disk-encrypted volume.
+* **POSIX file modes do not exist on Windows.** The restriction that protects
+  captured credentials therefore cannot be applied there. The manifest records
+  it as `partial` and lists the files, rather than implying a protection that
+  was not achieved. Do not hold client evidence on Windows without separate
+  filesystem access control.
+* **Retention is enforced only when `apiscan purge` is run.** Each run records
+  a `retain_until` date; nothing deletes it on that date by itself. A run with
+  no recorded retention date is never deleted automatically, deliberately --
+  but that also means evidence from before this mechanism existed will sit
+  there until someone looks.
+
+## What the newer safeguards do NOT establish
+
+Each of these is a real improvement with a real boundary, and the boundary is
+the part that gets forgotten.
+
+* **Redaction is pattern-based, and patterns miss things.** It removes the
+  profile's resolved `${ENV:...}` values, credential headers by name, and known
+  credential shapes. A secret the target invented and returned in an
+  unrecognised shape -- a session identifier in a custom field, a signed URL, a
+  base64 blob -- will survive it. **Read a redacted copy before sending it.**
+  `--pii` covers e-mail addresses and long digit runs; it is not a data-loss
+  prevention system and does not know your client's identifier formats. Declare
+  those in the profile's `redaction.patterns`.
+* **Literal credential matching needs the environment populated.** After an
+  engagement the secrets are rightly cleared, and then only the shape and
+  header passes apply. `apiscan redact` says so when it notices; the strongest
+  result comes from redacting while the `.env` is still loaded.
+* **The scope gate enforces what was authorised, not whether it was wise.**
+  It can prove a request was permitted by a recorded authorisation. It cannot
+  tell whether the person who signed that authorisation understood what it
+  permitted.
+* **A mode's ceilings bound a run, not its impact.** Forty requests to the
+  wrong endpoint can do more damage than four thousand to the right one. The
+  stop conditions react to a target that is already failing; they do not
+  predict one that is about to.
+* **State verification requires the API to offer a read path**, declared per
+  endpoint. Most callback-style APIs do not. Where there is none, the report
+  states that whether a request changed anything is unestablished -- which is
+  honest, and is also a permanent gap in external testing of such an API.
+* **Ownership testing requires resources whose owner is known.** With no
+  `controlled_resources` declared, object-level authorisation is simply NOT
+  TESTED and the report says so. That is deliberate: inferring ownership from
+  a response is unsound, and guessing identifiers against a live system risks
+  touching a real customer's record.
+* **`reproduced` and `manually-confirmed` confidence are operator assertions.**
+  The framework refuses to construct a `DEFECT` from an automated verdict
+  alone, which stops the most common overclaim. It cannot verify that a human
+  who set `confidence="manually-confirmed"` actually did the work.
+* **Header/body separation removes one way a target could choose its own
+  classification.** It does not make attribution correct -- attribution remains
+  heuristic, as stated above.
+* **Passing tests are not correct conclusions.** The suite establishes that the
+  oracle classifies a deliberately-wrong loopback mock as intended. It does not
+  establish that the classification is right about any real API. See
+  `RELEASE.md`, "What a release does NOT establish".

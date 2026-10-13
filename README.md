@@ -27,14 +27,81 @@ unit of measurement is whether a control exists and how deep it sits.
 * It will not send a request the engagement scope policy has not permitted.
   Scope matches on case *attributes* (`state_mutating`, `volume_class`,
   `payload_class`), so a newly written mutating case is denied by default rather
-  than slipping through a stale exclusion list.
-* It will not count a blocked or skipped case as a pass. An unreached test is
-  not evidence about the control it was meant to probe.
+  than slipping through a stale exclusion list. The gate lives in the transport,
+  which cannot be constructed without a policy -- so no command reaches the
+  network around it, readiness checks included.
+* It will not send anything at all under the default policy. `DEFAULT_DENY`
+  covers `state_mutating`, `volumetric`, `destructive`, `infrastructure_pivot`,
+  `bulk_extraction`, `injection`, `oversize` and `malformed`. A run needs a
+  recorded authorisation, and an authorisation is a named person, a date and a
+  retrievable reference.
+* It will not disable certificate verification for you. Verification is on by
+  default, a configured CA file that does not exist is a hard failure rather
+  than a quiet downgrade, and an unverified connection requires
+  `tls_verify.mode: "insecure"` written in the profile -- which is then reported
+  as a limitation of the run.
+* It will not let a response body rewrite its own verdict. Headers and body are
+  parsed from separate streams, and stored evidence declares the length of each
+  section, so a body containing a forged `HTTP/1.1 200 OK` line changes nothing.
+* It will not count a blocked, skipped or never-reached case as a pass. An
+  unreached test is not evidence about the control it was meant to probe.
+* It will not publish an automated verdict as a confirmed defect. Machine
+  findings are `UNRESOLVED` at `suspected` confidence, with the alternative
+  explanations a reviewer has to rule out. Promotion to `DEFECT` requires
+  reproducing it.
 * It will not issue a report without a statement of what the assessment did
-  *not* establish.
-* It will not write client data into its own tree. The path guard refuses it.
+  *not* establish, nor one whose defects lack an expectation, an observation, a
+  working baseline, evidence and the alternatives considered.
+* It will not let the target inject a formula into the client's spreadsheet. A
+  cell beginning `=`, `+`, `-` or `@` is neutralised at the renderer boundary.
+* It will not write client data into its own tree. The path guard refuses it,
+  symlinks included, and a case id is validated before it becomes a filename.
 * It will not claim a capability works when its dependency is missing. It
-  reports `NOT VERIFIED` and the install command.
+  reports `NOT VERIFIED` and the install command; `apiscan version` lists what
+  the current host can actually do.
+
+## Commands
+
+<!-- BEGIN GENERATED COMMAND TABLE -->
+
+| Command | Sends traffic | Writes files | Scope policy | What it does |
+|---|---|---|---|---|
+| `capture` | no | yes | optional | render PoC evidence from stored bytes |
+| `commands` | no | no | optional | print this table, which is the authoritative one |
+| `generate` | no | yes | optional | build the corpus and show what it would send; send nothing (writes files only with --out) |
+| `init-engagement` | no | yes | optional | scaffold an engagement workspace outside the framework |
+| `plan` | no | yes | **required** | write the reviewable test plan a live run would execute |
+| `preflight` | **YES** | yes | **required** | readiness gate; sends a small number of gated probes unless --offline |
+| `purge` | no | yes | optional | delete evidence past its retention date (dry run unless --force) |
+| `reclassify` | no | yes | optional | re-judge a stored run from captured bytes; send nothing |
+| `redact` | no | yes | optional | write a redacted copy of a run for distribution; the raw originals are left unmodified |
+| `report` | no | yes | optional | build the deliverable from one named run |
+| `scan` | **YES** | yes | **required** | execute the corpus and capture evidence |
+| `snapshot` | no | yes | optional | snapshot or roll back the framework source |
+| `tls-posture` | **YES** | yes | **required** | transport-layer posture; always captured DIRECT |
+| `validate` | no | no | optional | validate the profile and scope policy; send nothing |
+| `verify` | no | no | optional | re-hash a run against its evidence manifest |
+| `version` | no | no | optional | version, commit, environment and optional-dependency status |
+
+Generated from `automation/cli/main.py:COMMANDS` by `apiscan commands --markdown`. Do not edit by hand; the test suite regenerates and compares it.
+<!-- END GENERATED COMMAND TABLE -->
+
+## Three modes
+
+`--mode` defaults to `limited-live`, so an omitted flag narrows a run rather
+than widening it.
+
+| Mode | Sends | Requires a named subset | Refuses outright, whatever the policy says |
+|---|---|---|---|
+| `offline-review` | nothing; produces a reviewable test plan | no | everything |
+| `limited-live` | a named subset under hard ceilings | **yes** | volumetric, destructive, infrastructure_pivot, bulk_extraction, oversize, injection |
+| `active` | the corpus, within the agreed scope | no | nothing |
+
+A mode's refusals are applied in the gate before authorisations are consulted,
+and no authorisation lifts them. `limited-live` also caps case count, duration
+and response size, enforces a minimum delay between requests, and stops the run
+on repeated server errors or sustained latency. Operator flags only ever tighten
+those ceilings.
 
 ## Quick start
 
@@ -42,16 +109,30 @@ unit of measurement is whether a control exists and how deep it sits.
 ./apiscan init-engagement ~/engagements/example     # outside this tree
 cd ~/engagements/example && $EDITOR profile.json scope-policy.json .env
 set -a; . ./.env; set +a
+E=~/engagements/example
 
-./apiscan validate  --profile ~/engagements/example/profile.json
-./apiscan preflight --profile ~/engagements/example/profile.json \
-                    --evidence ~/engagements/example/evidence
-./apiscan scan      --profile ~/engagements/example/profile.json \
-                    --scope   ~/engagements/example/scope-policy.json \
-                    --evidence ~/engagements/example/evidence
-./apiscan report    --evidence ~/engagements/example/evidence \
-                    --out ~/engagements/example/reports \
-                    --not-established ~/engagements/example/limits.txt
+# Offline. Sends nothing. The plan is what you show a client for approval:
+# destination, identities, request count, and every operation that may
+# change data.
+./apiscan validate --profile $E/profile.json --scope $E/scope-policy.json
+./apiscan plan     --profile $E/profile.json --scope $E/scope-policy.json
+
+# Readiness, then the run. Both send traffic, both pass the scope gate.
+# --mode defaults to limited-live: a named subset under hard ceilings.
+./apiscan preflight --profile $E/profile.json --scope $E/scope-policy.json \
+                    --evidence $E/evidence
+./apiscan scan --profile $E/profile.json --scope $E/scope-policy.json \
+               --evidence $E/evidence --endpoint <id> --families B
+
+# Offline again. Name the run: defaulting to "whatever ran last" is how a
+# deliverable gets built from a two-observation TLS check.
+./apiscan report --evidence $E/evidence --run <run-id> --out $E/reports \
+                 --not-established $E/limits.txt --scope-note "..."
+
+# Raw evidence contains credentials -- the trace files hold every request
+# header. Share only a redacted copy; the originals are never modified.
+./apiscan redact --evidence $E/evidence --run <run-id> \
+                 --profile $E/profile.json --out $E/shareable
 ```
 
 ## Methodology
@@ -79,7 +160,11 @@ See `docs/METHODOLOGY.md`.
 
 ## Requirements
 
-Core loop: Python 3.8+ and `curl`. Nothing else is required.
+Core loop: CPython 3.9+ and `curl`. Nothing else is required. Release-tested on
+3.9 through 3.13 on Linux and macOS; Windows is exercised in CI and is
+best-effort (POSIX file modes do not apply there, so the evidence restriction
+that protects captured credentials cannot be enforced -- the manifest records
+that rather than implying otherwise). See `RELEASE.md`.
 
 Optional, each degrading gracefully: `openpyxl` (workbook), `Pillow` (embedded
 PoC images), Chrome/Chromium (PNG rendering), `pyobjc-framework-Quartz` (proxy
@@ -101,7 +186,9 @@ network access.
 
 | Document | Purpose |
 |---|---|
+| **`docs/WORKFLOW.md`** | **the authoritative workflow. Start here; the others defer to it** |
 | `CLAUDE.md` | operating instructions, including for an AI assistant |
+| `RELEASE.md` | the release process, and what a release must publish |
 | `docs/ARCHITECTURE.md` | components, data flow, design decisions |
 | `docs/SETUP.md` | installation and environment |
 | `docs/USAGE.md` | running an engagement end to end |

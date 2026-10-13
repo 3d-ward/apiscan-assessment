@@ -68,6 +68,7 @@
           "properties": {
             "mode": {
               "enum": [
+                "system",
                 "ca",
                 "insecure"
               ]
@@ -77,8 +78,12 @@
                 "string",
                 "null"
               ]
+            },
+            "$comment": {
+              "type": "string"
             }
-          }
+          },
+          "$comment": "system (default): verify against the host trust store. ca: verify against ca_path, which MUST exist -- a missing file is a hard failure, never a silent downgrade. insecure: do not verify; this has to be written here deliberately and it is reported as a limitation in the deliverable."
         },
         "client_cert": {
           "type": "object",
@@ -113,6 +118,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "max_response_bytes": {
+          "$comment": "Refuse to download a response larger than this. Protects the operator's disk and stops one pathological endpoint consuming a run's budget. The engagement mode applies its own ceiling as well; the lower of the two wins.",
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 134217728
         }
       }
     },
@@ -209,6 +220,51 @@
           },
           "payload_template": {
             "type": "string"
+          },
+          "state_verification": {
+            "$comment": "How to READ BACK what a data-changing request to this endpoint did. Declaring it lets the framework confirm that a request which appeared to be accepted actually changed something -- and, just as important, lets it say NOT VERIFIED when there is no way to check. Omit it when the API offers no read path: the deliverable then states that the resulting state was unverifiable rather than implying it was checked.",
+            "type": "object",
+            "required": [
+              "read_endpoint"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "read_endpoint": {
+                "$comment": "Endpoint id to read from.",
+                "type": "string"
+              },
+              "method": {
+                "type": "string",
+                "default": "GET"
+              },
+              "identifier_in": {
+                "$comment": "Where the identifier goes in the read request.",
+                "enum": [
+                  "query",
+                  "path_suffix",
+                  "body"
+                ]
+              },
+              "query_param": {
+                "type": "string"
+              },
+              "body_path": {
+                "type": "string"
+              },
+              "present_markers": {
+                "$comment": "Strings in the read response that mean the record exists. Their absence means it does not.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "absent_markers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
@@ -398,6 +454,79 @@
     },
     "$comment": {
       "type": "string"
+    },
+    "redaction": {
+      "$comment": "Optional. Extends the redaction applied when a redacted copy of evidence is produced for distribution. Credential headers, credential shapes and the profile's own ${ENV:...} values are always redacted; this adds engagement-specific fields. Patterns are regular expressions.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extra_env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "header_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "include_pii": {
+          "type": "boolean"
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "pattern": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "controlled_resources": {
+      "$comment": "Resources whose OWNER IS KNOWN, for object-level authorisation testing. An ownership finding is only sound when the tester knows who owns the object: reading a record back as the wrong identity proves nothing if nobody knows whose record it was, and guessing identifiers risks touching a real customer's data. Each entry names a resource created or supplied for the engagement and the identity that owns it. When this is empty, ownership cases are NOT generated and the deliverable records object-level authorisation as not established.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "identifier",
+          "owned_by",
+          "endpoint"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "identifier": {
+            "$comment": "The object identifier, as the API expects it.",
+            "type": "string"
+          },
+          "owned_by": {
+            "$comment": "Name of the auth.identities entry that owns it.",
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "provenance": {
+            "$comment": "How this resource came to exist and why its ownership is known -- e.g. 'created by the tester as identity primary on 2026-01-02'. Required reading for anyone auditing the finding.",
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

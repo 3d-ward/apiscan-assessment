@@ -24,6 +24,29 @@ def record(case_id, verdict, **kw):
     return base
 
 
+
+def defect(id, title, **kw):
+    """A DEFECT row carrying the elements an issuable defect must carry.
+
+    The register refuses a DEFECT at ``suspected`` confidence and a report
+    refuses to be issuable when a DEFECT row states no expectation, no
+    observation, no recommendation or no alternative explanations. That is the
+    point of those rules, so the fixture supplies them rather than the tests
+    routing around them.
+    """
+    kw.setdefault("confidence", "reproduced")
+    kw.setdefault("expected_behaviour",
+                  "A correct target rejects input of this class.")
+    kw.setdefault("observed_behaviour",
+                  "The target accepted it and answered 200.")
+    kw.setdefault("recommendation",
+                  "Validate the field against an explicit schema.")
+    kw.setdefault("alternative_explanations",
+                  ["the input may be neutralised downstream where this "
+                   "assessment cannot observe it"])
+    return Entry(id, title, **kw)
+
+
 RECORDS = [
     record("BASE-create", V.CONTROL_PRESENT, layer="accepted_success"),
     record("A01", V.CONTROL_ABSENT, endpoint="create"),
@@ -39,7 +62,7 @@ RECORDS = [
 class TestRegister(unittest.TestCase):
     def test_aggregates_are_derived(self):
         reg = Register(records=RECORDS)
-        reg.add(Entry("D-01", "t", case_ids=["A01", "A02"]))
+        reg.add(defect("D-01", "t", case_ids=["A01", "A02"]))
         reg.build()
         entry = reg.entries[0]
         self.assertEqual(entry.occurrences, 2)
@@ -48,25 +71,25 @@ class TestRegister(unittest.TestCase):
 
     def test_stale_case_reference_fails_loudly(self):
         reg = Register(records=RECORDS)
-        reg.add(Entry("D-01", "t", case_ids=["NOPE"]))
+        reg.add(defect("D-01", "t", case_ids=["NOPE"]))
         with self.assertRaises(RegisterError):
             reg.build()
 
     def test_lax_mode_records_the_problem_instead_of_raising(self):
         reg = Register(records=RECORDS, strict=False)
-        reg.add(Entry("D-01", "t", case_ids=["NOPE"]))
+        reg.add(defect("D-01", "t", case_ids=["NOPE"]))
         reg.build()
         self.assertIn("absent from the run data", reg.entries[0].notes)
 
     def test_duplicate_entry_ids_rejected(self):
         reg = Register(records=RECORDS)
-        reg.add(Entry("D-01", "t"))
+        reg.add(defect("D-01", "t"))
         with self.assertRaises(RegisterError):
-            reg.add(Entry("D-01", "u"))
+            reg.add(defect("D-01", "u"))
 
     def test_kinds_are_counted_separately(self):
         reg = Register(records=RECORDS)
-        reg.add(Entry("D-01", "defect", case_ids=["A01"]))
+        reg.add(defect("D-01", "defect", case_ids=["A01"]))
         reg.add(Entry("U-01", "unresolved", kind=KIND_UNRESOLVED))
         reg.add(Entry("V-01", "control held", kind=KIND_CONTROL))
         reg.build()
@@ -78,8 +101,17 @@ class TestRegister(unittest.TestCase):
     def test_machine_findings_are_grouped_not_one_row_per_case(self):
         reg = Register(records=RECORDS).promote_machine_findings()
         reg.build()
-        self.assertEqual(len(reg.confirmed()), 1)
-        self.assertEqual(reg.confirmed()[0].occurrences, 2)
+        # Promoted rows are UNRESOLVED/suspected now, not confirmed defects:
+        # a CONTROL-ABSENT verdict is an observation, not a proven weakness.
+        self.assertEqual(len(reg.confirmed()), 0)
+        promoted = [e for e in reg.entries if e.provenance == "MACHINE"]
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual(promoted[0].kind, KIND_UNRESOLVED)
+        self.assertEqual(promoted[0].confidence, "suspected")
+        self.assertTrue(promoted[0].alternative_explanations,
+                        "a suspected finding must list what else could "
+                        "explain the observation")
+        self.assertEqual(promoted[0].occurrences, 2)
 
     def test_invalid_severity_or_kind_rejected(self):
         with self.assertRaises(RegisterError):
@@ -137,11 +169,13 @@ class TestCoverage(unittest.TestCase):
 class TestReportModelAndRenderers(unittest.TestCase):
     def build(self, **cov_kw):
         reg = Register(records=RECORDS)
-        reg.add(Entry("D-01", "Identifier namespace not validated",
-                      case_ids=["A01", "A02"], severity="High",
-                      description="d", impact="i", recommendation="r"))
+        reg.add(defect("D-01", "Identifier namespace not validated",
+                       case_ids=["A01", "A02"], severity="High",
+                       description="d", impact="i", recommendation="r"))
         reg.add(Entry("V-01", "Media-type validation holds", kind=KIND_CONTROL,
                       severity="Informational", description="held",
+                      observed_behaviour="Every media-type bypass attempt was "
+                                         "refused at the media-type layer.",
                       conclusion="No bypass identified."))
         reg.build()
         cov_kw.setdefault("baseline_ok", True)
@@ -243,7 +277,7 @@ class TestHeadlineNomination(unittest.TestCase):
 
     def reg(self, records, case_ids):
         r = Register(records=records)
-        r.add(Entry("D-01", "t", case_ids=case_ids))
+        r.add(defect("D-01", "t", case_ids=case_ids))
         r.build()
         return r
 
@@ -264,7 +298,7 @@ class TestHeadlineNomination(unittest.TestCase):
 
     def test_entry_with_no_rows_returns_none(self):
         r = Register(records=self.RECORDS)
-        r.add(Entry("D-02", "t"))
+        r.add(defect("D-02", "t"))
         r.build()
         self.assertIsNone(r.headline_case(r.entries[0]))
 

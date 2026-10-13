@@ -20,6 +20,8 @@ Design notes carried from the source, and the two defaults that were changed:
 """
 import json
 
+from ..core.pathguard import safe_component
+
 EXPECTATIONS = ("reject", "accept", "observe")
 VOLUME_CLASSES = ("single", "burst", "sustained")
 PAYLOAD_CLASSES = ("benign", "injection", "oversize", "malformed", "structure",
@@ -55,7 +57,11 @@ class Case(object):
         if severity_if_accepted not in SEVERITIES:
             raise ValueError("case %s: unknown severity %r"
                              % (id, severity_if_accepted))
-        self.id = id
+        # A case id becomes a filename in the evidence store, and ids are not
+        # all framework-generated: --ids is operator input, and a corpus or
+        # register read from JSON is file input. Validate at the point the id
+        # enters the model rather than at each of the places it becomes a path.
+        self.id = safe_component(id, what="case id")
         self.endpoint = endpoint
         self.expectation = expectation
         self.description = description

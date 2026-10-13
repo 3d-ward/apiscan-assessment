@@ -17,6 +17,8 @@ Image embedding needs ``Pillow`` in addition. That is reported honestly rather
 than silently skipped: ``write`` returns a result object naming what was and
 was not included.
 """
+from . import safe
+
 SEVERITY_FILL = {
     "Critical": "7B1E1E", "High": "C0392B", "Medium": "E67E22",
     "Low": "F1C40F", "Informational": "5DADE2",
@@ -92,7 +94,7 @@ def write(model, path, poc_images=None):
 
     def header(ws, row, labels, widths):
         for i, label in enumerate(labels, 1):
-            cell = ws.cell(row=row, column=i, value=label)
+            cell = ws.cell(row=row, column=i, value=safe.cell(label))
             cell.font = hdr_font
             cell.fill = hdr_fill
             cell.border = border
@@ -137,8 +139,8 @@ def write(model, path, poc_images=None):
     ]
     r = 3
     for label, value in rows:
-        ws.cell(row=r, column=1, value=label).font = Font(bold=bool(label))
-        c = ws.cell(row=r, column=2, value=value)
+        ws.cell(row=r, column=1, value=safe.cell(label)).font = Font(bold=bool(label))
+        c = ws.cell(row=r, column=2, value=safe.cell(value))
         c.alignment = wrap
         r += 1
     r += 1
@@ -178,7 +180,7 @@ def write(model, path, poc_images=None):
             row["conclusion"], "\n".join(row["evidence_files"]), row["notes"],
         ]
         for i, value in enumerate(values, 1):
-            cell = ws.cell(row=r, column=i, value=value)
+            cell = ws.cell(row=r, column=i, value=safe.cell(value))
             cell.border = border
             cell.alignment = wrap
         kf = KIND_FILL.get(row["kind"])
@@ -209,7 +211,7 @@ def write(model, path, poc_images=None):
                   row["verdict"], row["control_depth"], row["capture_method"],
                   row["reason"], row["evidence"], row["description"]]
         for i, value in enumerate(values, 1):
-            cell = ws.cell(row=r, column=i, value=value)
+            cell = ws.cell(row=r, column=i, value=safe.cell(value))
             cell.border = border
             cell.alignment = wrap
         vf = VERDICT_FILL.get(row["verdict"])
@@ -240,7 +242,7 @@ def write(model, path, poc_images=None):
             value="What this assessment did NOT establish").font = Font(bold=True)
     r += 1
     for item in cov["not_established"]:
-        ws.cell(row=r, column=2, value=item).alignment = wrap
+        ws.cell(row=r, column=2, value=safe.cell(item)).alignment = wrap
         r += 1
     if cov["problems"]:
         r += 1
@@ -248,7 +250,7 @@ def write(model, path, poc_images=None):
                 value="Outstanding issues with this run").font = Font(bold=True)
         r += 1
         for item in cov["problems"]:
-            ws.cell(row=r, column=2, value=item).alignment = wrap
+            ws.cell(row=r, column=2, value=safe.cell(item)).alignment = wrap
             r += 1
     r += 1
     ws.cell(row=r, column=1, value="Scope note").font = Font(bold=True)

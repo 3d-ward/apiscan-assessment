@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ..corpus.payload import PayloadTemplate
 from ..corpus.payload import get as pget
 from ..core.errors import ScopeViolation
+from ..governance.scope import Probe
 
 #: Absolute ceilings. A caller cannot exceed these, whatever it asks for.
 MAX_REQUESTS = 200
@@ -114,13 +115,36 @@ def probe(profile, auth_provider, transport, endpoint_id=None, requests=80,
             "the rate-limit probe generates request volume and is classed "
             "volumetric; it runs only with authorised=True, which requires an "
             "authorisation recorded in the engagement scope policy")
+
+    # ENGINEERING IMPROVEMENT (review finding: "apply scope checks to every
+    # network request"). ``scope_policy`` was accepted by this signature and
+    # then never consulted -- so the parameter read as a gate at every call
+    # site while the only real check was the ``authorised`` boolean a caller
+    # sets itself. A flag the caller controls is not an authorisation; the
+    # policy is. Now the burst is evaluated as a volumetric probe before any
+    # thread starts, and each request inside it is gated again by the
+    # transport.
+    if scope_policy is None:
+        raise ScopeViolation(
+            "the rate-limit probe refuses to run without a scope policy. It "
+            "generates %d requests against the client's endpoint, so it is "
+            "gated like any case: pass "
+            "scope_policy=ScopePolicy.load(<engagement scope-policy.json>) "
+            "with a recorded authorisation for class 'volumetric'."
+            % requests)
+    endpoint_id = endpoint_id or profile.endpoint_ids[0]
+    burst = Probe("rate_limit.burst", endpoint=endpoint_id, method="POST",
+                  state_mutating=False, volume_class="sustained",
+                  payload_class="benign", risk_classes=["volumetric"],
+                  description="bounded rate-limit presence burst")
+    scope_policy.require(burst)
+
     if requests > MAX_REQUESTS or workers > MAX_WORKERS:
         raise ScopeViolation(
             "requested %d requests / %d workers exceeds the module ceiling of "
             "%d / %d; these limits are deliberate and are not configurable"
             % (requests, workers, MAX_REQUESTS, MAX_WORKERS))
 
-    endpoint_id = endpoint_id or profile.endpoint_ids[0]
     url = profile.url_for(endpoint_id)
     tpl = PayloadTemplate(profile.template_for(endpoint_id), endpoint_id)
     ep = profile.endpoint(endpoint_id)
@@ -135,7 +159,13 @@ def probe(profile, auth_provider, transport, endpoint_id=None, requests=80,
                       if tpl.correlation_path else None))
         body = tpl.dumps(tpl.instantiate(identifier=ident, correlation=corr))
         t0 = time.time()
-        resp = transport.send("rate-%03d" % i, url, method="POST", body=body)
+        one_probe = Probe("rate-%03d" % i, endpoint=endpoint_id,
+                          method="POST", state_mutating=False,
+                          volume_class="sustained", payload_class="benign",
+                          risk_classes=["volumetric"],
+                          description="one request of the bounded burst")
+        resp = transport.send("rate-%03d" % i, url, method="POST", body=body,
+                              probe=one_probe)
         return resp.status, time.time() - t0, resp.header("Retry-After")
 
     start = time.time()

@@ -96,6 +96,54 @@ def _sh(cmd, timeout=25, stdin_data=None):
         return 127, "", str(exc)
 
 
+
+# -- the one gate --------------------------------------------------------
+#
+# ENGINEERING IMPROVEMENT (review finding: "apply scope checks to every
+# network request, including preflight and proxy probes").
+#
+# Preflight was the clearest hole in the old design. It sent a POST to the
+# first endpoint, then a full well-formed baseline body, then -- with fidelity
+# enabled -- a 200 KB body, a NUL byte and a truncated document, all before
+# the scan command that carries the scope policy had been typed. The command
+# did not even accept a --scope argument, so there was nothing to check
+# against. Readiness checking is not a licence to send traffic; it is traffic.
+#
+# Every check below that opens a socket now declares a probe and passes it to
+# this function first. A denied probe is reported NOT VERIFIED -- never PASS,
+# and never sent.
+
+def scope_decision(ctx, probe):
+    """(permitted, reason) for one preflight probe. Never sends anything."""
+    policy = ctx.get("scope_policy")
+    if policy is None:
+        return False, (
+            "no scope policy was supplied, so this probe was NOT sent. A "
+            "missing policy is a refusal, not a default-allow: preflight "
+            "opens sockets to the client's infrastructure like any other "
+            "command. Pass --scope <engagement scope-policy.json>, or "
+            "--offline to skip every networked check.")
+    ok, reason = policy.evaluate(probe, via_proxy=ctx.get("via_proxy"))
+    return ok, reason
+
+
+def _denied(chk, reason, probe):
+    return CheckResult(
+        chk.check_id, chk.name, NOT_VERIFIED,
+        "not sent: %s" % reason,
+        "record an authorisation for this probe in the engagement scope "
+        "policy if readiness must be verified against the live target, or "
+        "accept that it is unverified and rely on --offline checks. Probe "
+        "%r declares classes: %s"
+        % (getattr(probe, "id", "?"),
+           ", ".join(sorted(_probe_classes(probe))) or "none"))
+
+
+def _probe_classes(probe):
+    from framework.governance.scope import ScopePolicy
+    return ScopePolicy.default().classes_of(probe)
+
+
 def _uses_proxy(ctx):
     return bool(ctx.get("profile") and ctx["profile"].proxy)
 
@@ -192,8 +240,15 @@ def _secrets(ctx, chk):
 
 # -- 3. proxy ------------------------------------------------------------
 @register("proxy.listener", "proxy listener accepting connections", 30,
-          applies=_uses_proxy)
+          applies=lambda ctx: _uses_proxy(ctx) and not ctx.get("offline"))
 def _listener(ctx, chk):
+    from framework.governance.scope import ReadOnlyProbe
+    probe = ReadOnlyProbe("preflight.proxy.listener", method="",
+                          risk_classes=["proxy_probe"], use_proxy=True,
+                          description="TCP connect to the proxy listener")
+    ok, reason = scope_decision(ctx, probe)
+    if not ok:
+        return _denied(chk, reason, probe)
     parsed = urlparse(ctx["profile"].proxy)
     host, port = parsed.hostname, parsed.port or 8080
     sock = socket.socket()
@@ -213,9 +268,17 @@ def _listener(ctx, chk):
 
 
 @register("proxy.forwarding", "proxy forwards rather than holds requests", 31,
-          applies=_uses_proxy)
+          applies=lambda ctx: _uses_proxy(ctx) and not ctx.get("offline"))
 def _forwarding(ctx, chk):
+    from framework.governance.scope import ReadOnlyProbe
     from tools.proxy import health
+    gate = ReadOnlyProbe("preflight.proxy.forwarding", method="GET",
+                         risk_classes=["proxy_probe"], use_proxy=True,
+                         description="plain GET through the proxy to confirm "
+                                     "it forwards rather than holds requests")
+    ok, reason = scope_decision(ctx, gate)
+    if not ok:
+        return _denied(chk, reason, gate)
     probe = ctx.get("proxy_probe_url") or health.DEFAULT_PROBE_URL
     result = health.check(ctx["profile"].proxy, probe)
     if not result.healthy:
@@ -224,21 +287,45 @@ def _forwarding(ctx, chk):
     return CheckResult(chk.check_id, chk.name, PASS, result.detail)
 
 
-@register("proxy.ca", "proxy CA material consistent", 32, applies=_uses_proxy)
+@register("proxy.ca", "proxy CA material consistent", 32,
+          applies=lambda ctx: _uses_proxy(ctx) and not ctx.get("offline"))
 def _ca(ctx, chk):
     from tools.proxy import ca
     verify = (ctx["profile"].transport.get("tls_verify") or {})
     ca_path = verify.get("ca_path")
-    if verify.get("mode") != "ca" or not ca_path:
+    mode = verify.get("mode") or "system"
+    if mode == "insecure":
         return CheckResult(
             chk.check_id, chk.name, WARN,
-            "TLS verification is disabled for the proxied path",
-            "acceptable while a proxy terminates TLS, but set tls_verify.mode "
-            "to 'ca' with a fetched CA to verify the proxy strictly")
+            "transport.tls_verify.mode is 'insecure': certificate validity "
+            "will NOT be checked on this run, and the report will say so",
+            "fetch the proxy CA and set tls_verify.mode to 'ca' with its "
+            "path. 'insecure' is honest but it is a stated limitation, not a "
+            "neutral default.")
+    if mode != "ca" or not ca_path:
+        return CheckResult(
+            chk.check_id, chk.name, WARN,
+            "mode is %r, so the proxy's forged certificate will be checked "
+            "against the HOST trust store and every request will fail the "
+            "handshake" % mode,
+            "set tls_verify.mode to 'ca' with the proxy CA path (fetch it "
+            "from the proxy control endpoint), or state mode 'insecure' "
+            "deliberately if this engagement accepts an unverified path")
     if not os.path.exists(ca_path):
-        return CheckResult(chk.check_id, chk.name, FAIL,
-                           "CA file not found at %s" % ca_path,
-                           "fetch it from the proxy control endpoint")
+        return CheckResult(
+            chk.check_id, chk.name, FAIL,
+            "CA file not found at %s" % ca_path,
+            "fetch it from the proxy control endpoint. Until it exists every "
+            "request in the run will REFUSE to be sent: a missing CA no "
+            "longer downgrades silently to an unverified connection.")
+    from framework.governance.scope import ReadOnlyProbe
+    gate = ReadOnlyProbe("preflight.proxy.ca", method="GET",
+                         risk_classes=["proxy_probe"], use_proxy=True,
+                         description="fetch the proxy CA to compare "
+                                     "fingerprints")
+    ok, reason = scope_decision(ctx, gate)
+    if not ok:
+        return _denied(chk, reason, gate)
     matches, detail = ca.compare(ctx["profile"].proxy, ca_path,
                                  ctx.get("proxy_control_url")
                                  or ca.DEFAULT_CONTROL_URL)
@@ -261,8 +348,20 @@ def _reachable(ctx, chk):
     if transport is None:
         return CheckResult(chk.check_id, chk.name, SKIP, "no transport built")
     endpoint = profile.endpoint_ids[0]
+    from framework.governance.scope import Probe
+    # Declared state_mutating: this is a POST to an endpoint whose handling of
+    # an empty body is exactly what is unknown. Calling it harmless because it
+    # is "only a readiness check" is the assumption that makes an unreviewed
+    # write look like infrastructure.
+    probe = Probe("preflight.target.reachable", endpoint=endpoint,
+                  method="POST", state_mutating=True,
+                  risk_classes=["preflight_probe"],
+                  description="empty-body POST to confirm the target answers")
+    ok, reason = scope_decision(ctx, probe)
+    if not ok:
+        return _denied(chk, reason, probe)
     resp = transport.send("preflight-reach", profile.url_for(endpoint),
-                          method="POST", body="{}")
+                          method="POST", body="{}", probe=probe)
     if not resp.ok_transport:
         return CheckResult(
             chk.check_id, chk.name, FAIL,
@@ -298,9 +397,12 @@ def _oracle(ctx, chk):
     profile = ctx["profile"]
     transport = ctx["transport"]
     case = baseline_cases(profile, endpoints=[profile.endpoint_ids[0]])[0]
+    ok, reason = scope_decision(ctx, case)
+    if not ok:
+        return _denied(chk, reason, case)
     resp = transport.send("preflight-oracle", profile.url_for(case.endpoint),
                           method=case.method, body=case.body,
-                          content_type=case.content_type)
+                          content_type=case.content_type, probe=case)
     attribution = L.attribute(resp, profile.response_model)
     decision = V.decide("accept", attribution)
     if decision.verdict == V.CONTROL_PRESENT:
@@ -444,6 +546,8 @@ def to_json(results, ctx=None):
         "ready": not any(r.status in BLOCKING for r in results),
         "unreliable_payload_classes": (ctx or {}).get(
             "unreliable_payload_classes", []),
+        "scope_policy_supplied": bool((ctx or {}).get("scope_policy")),
+        "offline": bool((ctx or {}).get("offline")),
     }, indent=2)
 
 

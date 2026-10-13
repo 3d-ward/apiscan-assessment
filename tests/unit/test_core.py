@@ -1,9 +1,10 @@
 import os
+import os
 import shutil
 import tempfile
 import unittest
 
-from tests.support import ROOT, load_profile, auth_for  # noqa: F401
+from tests.support import test_scope, ROOT, load_profile, auth_for  # noqa: F401
 from framework.core import auth as A
 from framework.core.errors import PathGuardError
 from framework.core.pathguard import (FRAMEWORK_ROOT, assert_outside_framework,
@@ -82,7 +83,8 @@ class TestTransportArgs(unittest.TestCase):
         self.profile = load_profile(base_url="http://127.0.0.1:1/v1",
                                     proxy="http://127.0.0.1:8080")
         self.transport = Transport(self.profile, auth_for(self.profile),
-                                   body_dir=self.tmp)
+                                   body_dir=self.tmp,
+                                   scope_policy=test_scope())
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -90,7 +92,41 @@ class TestTransportArgs(unittest.TestCase):
     def test_proxy_args_present_when_proxied(self):
         args = self.transport.build_args("http://api.example.com/y")
         self.assertIn("-x", args)
+
+    def test_verification_is_on_by_default(self):
+        """D-TLS. The old behaviour was: use --cacert when a CA file is
+        configured AND present, otherwise -k. So a profile that said nothing
+        got no verification, and a profile naming a CA that had moved got no
+        verification either -- silently, which is the part that matters."""
+        args = self.transport.build_args("https://api.example.com/y")
+        self.assertNotIn("-k", args)
+        self.assertNotIn("--proxy-insecure", args)
+        self.assertNotIn("--cacert", args)
+
+    def test_insecure_must_be_declared_and_is_then_reported(self):
+        self.profile.transport["tls_verify"] = {"mode": "insecure"}
+        args = self.transport.build_args("https://api.example.com/y")
+        self.assertIn("-k", args)
         self.assertIn("--proxy-insecure", args)
+        self.assertIn("NOT VERIFIED", self.transport.tls_note())
+
+    def test_a_missing_ca_file_is_a_hard_failure(self):
+        from framework.core.errors import TransportError
+        self.profile.transport["tls_verify"] = {
+            "mode": "ca", "ca_path": os.path.join(self.tmp, "absent-ca.pem")}
+        with self.assertRaises(TransportError) as caught:
+            self.transport.build_args("https://api.example.com/y")
+        self.assertIn("does not exist", str(caught.exception))
+
+    def test_a_present_ca_file_is_used(self):
+        ca = os.path.join(self.tmp, "ca.pem")
+        with open(ca, "w") as fh:
+            fh.write("-----BEGIN CERTIFICATE-----\nsynthetic\n"
+                     "-----END CERTIFICATE-----\n")
+        self.profile.transport["tls_verify"] = {"mode": "ca", "ca_path": ca}
+        args = self.transport.build_args("https://api.example.com/y")
+        self.assertEqual(args[args.index("--cacert") + 1], ca)
+        self.assertNotIn("-k", args)
 
     def test_proxy_args_absent_when_direct(self):
         args = self.transport.build_args("http://api.example.com/y", use_proxy=False)

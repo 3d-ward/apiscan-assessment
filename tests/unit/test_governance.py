@@ -33,11 +33,36 @@ class TestScopeDefaults(unittest.TestCase):
         self.assertIn("state_mutating", reason)
 
     def test_read_only_is_permitted(self):
-        self.assertTrue(self.policy.permits(FakeCase(state_mutating=False)))
+        """Read-only means a read METHOD as well as the annotation. A POST
+        that declares itself non-mutating is still denied -- see
+        test_a_write_method_overrides_a_non_mutating_annotation."""
+        self.assertTrue(self.policy.permits(
+            FakeCase(method="GET", state_mutating=False)))
+
+    def test_a_write_method_overrides_a_non_mutating_annotation(self):
+        """The annotation is an author's prediction about a target whose
+        behaviour is the unknown under test. The generators mark every case
+        they expect to be rejected as non-mutating -- 156 POSTs in the example
+        corpus, each of which creates a record if the validation it probes is
+        absent. The HTTP method is true by definition, so the gate uses it."""
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            permitted, reason = self.policy.evaluate(
+                FakeCase(method=method, state_mutating=False))
+            self.assertFalse(permitted, method)
+            self.assertIn("write method %s" % method, reason)
+
+    def test_the_derivation_only_ever_adds_the_class(self):
+        """A case that declares itself mutating while using a read method is
+        still mutating: the derivation is a floor, not a replacement."""
+        permitted, reason = self.policy.evaluate(
+            FakeCase(method="GET", state_mutating=True))
+        self.assertFalse(permitted)
+        self.assertIn("state_mutating", reason)
 
     def test_volumetric_is_denied(self):
         self.assertFalse(self.policy.permits(
-            FakeCase(state_mutating=False, volume_class="burst")))
+            FakeCase(method="GET", state_mutating=False,
+                     volume_class="burst")))
 
     def test_explicit_risk_classes_are_honoured(self):
         self.assertFalse(self.policy.permits(
@@ -102,12 +127,14 @@ class TestScopeFilters(unittest.TestCase):
         policy = ScopePolicy({"schema": "scope-policy/1", "deny_classes": [],
                               "max_risk": "read_only"})
         self.assertFalse(policy.permits(FakeCase()))
-        self.assertTrue(policy.permits(FakeCase(state_mutating=False)))
+        self.assertTrue(policy.permits(FakeCase(method="GET",
+                                                state_mutating=False)))
 
     def test_filter_splits_and_explains(self):
         policy = ScopePolicy.default()
         permitted, skipped = policy.filter(
-            [FakeCase("A", state_mutating=False), FakeCase("B")])
+            [FakeCase("A", method="GET", state_mutating=False),
+             FakeCase("B")])
         self.assertEqual([c.id for c in permitted], ["A"])
         self.assertEqual(skipped[0][0].id, "B")
         self.assertIn("state_mutating", skipped[0][1])

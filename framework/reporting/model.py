@@ -165,6 +165,13 @@ class ReportModel(object):
         if not self.scope_note:
             problems.append("scope_note is empty; the rules of engagement and "
                             "exclusions must be stated")
+        # ENGINEERING IMPROVEMENT (review finding 4). A report is not issuable
+        # while any DEFECT row it carries lacks an expectation, an
+        # observation, a baseline, evidence, a recommendation or the
+        # alternative explanations that were ruled out. These are the elements
+        # a client needs in order to disagree with a finding, which is exactly
+        # when a report has to hold up.
+        problems.extend(self.register.issuable_problems())
         problems.extend(self.coverage.validate())
         return problems
 

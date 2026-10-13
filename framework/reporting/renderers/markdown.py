@@ -5,6 +5,25 @@ fail: it needs no third-party package, so a report can always be produced.
 """
 import json
 
+from . import safe
+
+
+#: Spelled out rather than printed as a bare word. "suspected" in a severity
+#: table is read as a hedge; the sentence is read as a statement about how
+#: much work stands behind the row.
+CONFIDENCE_PHRASES = {
+    "suspected": "SUSPECTED -- observed automatically; not reproduced, and "
+                 "no impact demonstrated",
+    "reproduced": "REPRODUCED -- observed again deliberately, with a working "
+                  "baseline alongside it",
+    "manually-confirmed": "MANUALLY CONFIRMED -- a human drove the path and "
+                          "observed the consequence",
+}
+
+
+def _confidence_phrase(value):
+    return CONFIDENCE_PHRASES.get(value, value or "not stated")
+
 
 def _sev_table(counts):
     order = ["Critical", "High", "Medium", "Low", "Informational"]
@@ -89,6 +108,7 @@ def render(model):
         A("| | |")
         A("|---|---|")
         A("| Kind | %s |" % r["kind"])
+        A("| Confidence | %s |" % _confidence_phrase(r["confidence"]))
         A("| Severity | %s |" % r["severity"])
         A("| Category | %s |" % (r["category"] or "-"))
         A("| CWE | %s |" % (r["cwe"] or "-"))
@@ -102,25 +122,59 @@ def render(model):
             A("| Evidence capture method | %s |"
               % ", ".join(r["capture_methods"]))
         A("")
-        if r["description"]:
-            A("**Description.** %s" % r["description"])
+        # Expected and observed are stated separately and in that order. A
+        # single "description" lets the two blur together, and a reader cannot
+        # then tell the declared contract from the thing that happened.
+        if r["expected_behaviour"]:
+            A("**Expected behaviour.** %s" % safe.md(r["expected_behaviour"]))
+            A("")
+        if r["observed_behaviour"]:
+            A("**Observed behaviour.** %s" % safe.md(r["observed_behaviour"]))
+            A("")
+        if r["baseline_reference"]:
+            A("**Baseline.** %s" % safe.md(r["baseline_reference"]))
+            A("")
+        else:
+            A("**Baseline.** None recorded for the affected endpoints. "
+              "Without a working baseline a rejection cannot be "
+              "distinguished from a broken harness, and an acceptance cannot "
+              "be distinguished from a target that accepts everything.")
+            A("")
+        if r["state_verification"]:
+            A("**Resulting state.** %s" % safe.md(r["state_verification"]))
+            A("")
+        if r["description"] and r["description"] != r["observed_behaviour"]:
+            A("**Description.** %s" % safe.md(r["description"]))
             A("")
         if r["impact"]:
-            A("**Impact.** %s" % r["impact"])
+            A("**Impact.** %s" % safe.md(r["impact"]))
+            A("")
+        if r["alternative_explanations"]:
+            A("**Other explanations considered.** A finding is only as strong "
+              "as the explanations ruled out:")
+            A("")
+            for item in r["alternative_explanations"]:
+                A("- %s" % safe.md(item))
+            A("")
+        if r["limitations"]:
+            A("**Limitations of this finding.**")
+            A("")
+            for item in r["limitations"]:
+                A("- %s" % safe.md(item))
             A("")
         if r["recommendation"]:
-            A("**Recommendation.** %s" % r["recommendation"])
+            A("**Recommendation.** %s" % safe.md(r["recommendation"]))
             A("")
         if r["conclusion"]:
-            A("**Conclusion.** %s" % r["conclusion"])
+            A("**Conclusion.** %s" % safe.md(r["conclusion"]))
             A("")
         if r["evidence_files"]:
             A("Evidence:")
             for f in r["evidence_files"]:
-                A("- `%s`" % f)
+                A("- `%s`" % safe.md(f))
             A("")
         if r["notes"]:
-            A("_%s_" % r["notes"])
+            A("_%s_" % safe.md(r["notes"]))
             A("")
 
     controls = s["controls_verified"]

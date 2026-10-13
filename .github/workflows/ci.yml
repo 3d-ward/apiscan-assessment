@@ -1,0 +1,125 @@
+# Continuous integration.
+#
+# ENGINEERING IMPROVEMENT (review finding 5: "run automated checks on each
+# supported operating system and Python version" and "distinguish
+# environment-related test failures from product defects").
+#
+# Two jobs, and the split is the point:
+#
+#   tests           the matrix. Runs the suite on every supported OS and
+#                   Python version, with the environment report printed FIRST
+#                   so a failure can be read against what the runner actually
+#                   had installed. A test that needs an absent optional
+#                   dependency must SKIP, not fail -- that is what makes an
+#                   environment gap distinguishable from a product defect.
+#
+#   degraded        the suite with every optional dependency deliberately
+#                   absent. The framework's own rule is that a missing
+#                   dependency yields NOT VERIFIED rather than a pass, and
+#                   this is where that is proved rather than assumed.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} / python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The build reports its own commit, and `git describe` needs more
+          # than a shallow clone to do that honestly.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install optional dependencies
+        run: python -m pip install --upgrade pip openpyxl Pillow
+
+      - name: Report the environment before running anything
+        shell: bash
+        run: |
+          python ./automation/cli/main.py version --json
+          echo "--- curl ---"
+          curl --version || echo "curl NOT AVAILABLE"
+          echo "--- openssl ---"
+          openssl version || echo "openssl NOT AVAILABLE"
+
+      - name: Run the test suite
+        run: python -m unittest discover -s tests -t . -p "test_*.py" -v
+
+      - name: Confirm the suite reports no outbound network access
+        run: python -m unittest tests.security.test_no_egress -v
+
+  degraded:
+    name: no optional dependencies (ubuntu / python 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Confirm the optional dependencies really are absent
+        run: |
+          python ./automation/cli/main.py version
+          python - <<'PY'
+          import importlib, sys
+          for name in ("openpyxl", "PIL"):
+              try:
+                  importlib.import_module(name)
+              except ImportError:
+                  continue
+              sys.exit("%s is installed; this job must run without it" % name)
+          print("openpyxl and Pillow are absent, as this job requires")
+          PY
+
+      - name: Run the test suite with nothing optional installed
+        run: python -m unittest discover -s tests -t . -p "test_*.py"
+
+      - name: Fail if any test ERRORED rather than skipping
+        run: |
+          python -m unittest discover -s tests -t . -p "test_*.py" 2>&1 \
+            | tee result.txt
+          if grep -qE '^(FAILED|ERROR)' result.txt; then
+            echo "A missing optional dependency must make a test SKIP, not"
+            echo "fail. A failure here means the framework reports a"
+            echo "capability as working when its dependency is absent."
+            exit 1
+          fi
+
+  hygiene:
+    name: contamination and hygiene checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: No client data, no credential literals, reserved hostnames only
+        run: python -m unittest tests.security.test_hygiene -v
+
+      - name: Documentation has not drifted from the code
+        run: python -m unittest tests.regression.test_documentation_matches_code -v
+
+      - name: The regression tests for every reviewed defect
+        run: python -m unittest tests.regression.test_review_defects -v

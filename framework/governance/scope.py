@@ -31,10 +31,43 @@ SCHEMA_PATH = os.path.join(
 
 RISK_ORDER = ["read_only", "mutating", "volumetric", "destructive"]
 
-#: Conservative default: refuse anything that changes state or generates
-#: volume until an engagement explicitly authorises it.
+#: Conservative default: refuse anything that changes state, generates volume,
+#: or carries a payload that can itself damage a vulnerable target.
+#:
+#: ENGINEERING IMPROVEMENT (review finding: "make the default testing mode
+#: genuinely conservative"). ``injection``, ``oversize`` and ``malformed`` were
+#: previously permitted by default on the reasoning that they are annotated
+#: non-mutating. That reasoning is wrong in the only case that matters: a
+#: payload designed to exercise a missing control reaches the application
+#: precisely when the control is missing, and an injection that succeeds, an
+#: oversize body that exhausts a buffer or a malformed document that crashes a
+#: parser changes state or availability whatever the annotation says. A case
+#: cannot truthfully declare itself harmless against a target whose handling of
+#: it is the unknown under test.
 DEFAULT_DENY = ["state_mutating", "volumetric", "destructive",
-                "infrastructure_pivot", "bulk_extraction"]
+                "infrastructure_pivot", "bulk_extraction",
+                "injection", "oversize", "malformed"]
+
+#: Classes that only an explicitly ACTIVE engagement mode may authorise. See
+#: ``framework/governance/modes.py``.
+AGGRESSIVE_CLASSES = frozenset(["volumetric", "destructive",
+                                "infrastructure_pivot", "bulk_extraction",
+                                "oversize", "injection"])
+
+#: HTTP methods that write. A request using one of these is treated as
+#: state-mutating whatever the case ANNOTATION says.
+#:
+#: ENGINEERING IMPROVEMENT (review finding: payloads "can still affect a
+#: vulnerable application even when a case is labelled non-mutating"). The
+#: annotation is an author's prediction about a target whose behaviour is the
+#: unknown under test, and the generators set it to False for any case they
+#: expect to be rejected -- 156 of the example corpus's POSTs, every one of
+#: which creates a record if the validation it probes is missing. Deriving the
+#: class from the method instead means the gate relies on something true by
+#: HTTP semantics rather than on a prediction. A case may still declare itself
+#: mutating when it uses a read method; the derivation only ever ADDS the
+#: class.
+WRITE_METHODS = frozenset(["POST", "PUT", "PATCH", "DELETE"])
 
 
 class Authorisation(object):
@@ -69,8 +102,47 @@ class Authorisation(object):
                                       self.reference)
 
 
-class TransportProbe(object):
-    """A transport-layer probe, shaped so the scope gate can judge it.
+class Probe(object):
+    """A non-corpus request, shaped so the scope gate can judge it.
+
+    ENGINEERING IMPROVEMENT (review finding: "apply scope checks to every
+    network request, including preflight and proxy probes").
+
+    The gate used to see corpus cases only. Everything else that opened a
+    socket -- the preflight reachability and oracle-calibration requests, the
+    proxy forwarding and CA probes, the fidelity comparison, the rate-limit
+    burst, the TLS handshakes -- reached the network without passing it. Those
+    are requests to the client's infrastructure like any other, so they are
+    given a case-shaped face here and judged by the same policy. One gate, no
+    exceptions.
+
+    Defaults fail closed. ``state_mutating`` is True, exactly as it is on a
+    corpus case, so a probe whose author did not think about what it does is
+    denied by the default policy rather than sent.
+    """
+
+    def __init__(self, probe_id, endpoint=None, method="",
+                 state_mutating=True, volume_class="single",
+                 payload_class="benign", risk_classes=None, use_proxy=None,
+                 description=""):
+        self.id = probe_id
+        self.endpoint = endpoint
+        #: Empty by default so a method allowlist written for HTTP cases does
+        #: not accidentally deny a probe that issues no HTTP method.
+        self.method = method
+        self.state_mutating = bool(state_mutating)
+        self.volume_class = volume_class
+        self.payload_class = payload_class
+        self.risk_classes = list(risk_classes or [])
+        self.use_proxy = use_proxy
+        self.description = description
+
+    def __repr__(self):
+        return "<%s %s>" % (type(self).__name__, self.id)
+
+
+class TransportProbe(Probe):
+    """A transport-layer probe: below HTTP, and direct by construction.
 
     ENGINEERING IMPROVEMENT. TLS and client-certificate probes open sockets to
     the target but are not corpus cases, so they never passed through
@@ -84,19 +156,27 @@ class TransportProbe(object):
     """
 
     def __init__(self, probe_id, endpoint=None, risk_classes=None):
-        self.id = probe_id
-        self.endpoint = endpoint
-        #: Empty so a method allowlist written for HTTP cases does not
-        #: accidentally deny a probe that issues no HTTP method.
-        self.method = ""
-        self.state_mutating = False
-        self.volume_class = "single"
-        self.payload_class = "benign"
-        self.risk_classes = list(risk_classes or []) + ["transport_probe"]
-        self.use_proxy = False
+        super(TransportProbe, self).__init__(
+            probe_id, endpoint=endpoint, method="", state_mutating=False,
+            volume_class="single", payload_class="benign",
+            risk_classes=list(risk_classes or []) + ["transport_probe"],
+            use_proxy=False)
 
-    def __repr__(self):
-        return "<TransportProbe %s>" % self.id
+
+class ReadOnlyProbe(Probe):
+    """A probe that is genuinely non-mutating: a GET, a handshake, a fetch.
+
+    Declaring it explicitly is the point. A probe does not become read-only by
+    being convenient to send; the author has to say so, and the class name is
+    what a reviewer reads when asking why this request was permitted.
+    """
+
+    def __init__(self, probe_id, endpoint=None, method="GET",
+                 risk_classes=None, use_proxy=None, description=""):
+        super(ReadOnlyProbe, self).__init__(
+            probe_id, endpoint=endpoint, method=method, state_mutating=False,
+            risk_classes=list(risk_classes or []), use_proxy=use_proxy,
+            description=description)
 
 
 class ScopePolicy(object):
@@ -115,6 +195,24 @@ class ScopePolicy(object):
         self.require_proxy = bool(spec.get("require_proxy"))
         self.authorisations = [Authorisation(a)
                                for a in (spec.get("authorisations") or [])]
+        #: Classes refused by the ENGAGEMENT MODE rather than by the policy.
+        #: Checked before authorisations and never lifted by one: a cautious
+        #: mode that an authorisation in the same engagement's policy file
+        #: could override would not be a safety property, just a suggestion.
+        self.hard_deny = set()
+        self.mode_name = None
+
+    def with_mode(self, mode):
+        """Return a copy of this policy narrowed by an engagement mode.
+
+        The policy records what the client agreed to; the mode records how
+        much of it the operator is exercising now. Both must permit a request,
+        and this is where the intersection is taken.
+        """
+        narrowed = ScopePolicy(self.spec)
+        narrowed.hard_deny = set(getattr(mode, "hard_deny", ()) or ())
+        narrowed.mode_name = getattr(mode, "name", str(mode))
+        return narrowed
 
     # -- construction ----------------------------------------------------
     @classmethod
@@ -136,9 +234,15 @@ class ScopePolicy(object):
 
     # -- evaluation ------------------------------------------------------
     def classes_of(self, case):
-        """Attribute classes a case belongs to."""
+        """Attribute classes a case belongs to.
+
+        ``state_mutating`` is the union of what the case declares and what its
+        HTTP method implies. See WRITE_METHODS for why the declaration alone is
+        not enough.
+        """
         found = set()
-        if getattr(case, "state_mutating", True):
+        method = (getattr(case, "method", "") or "").upper()
+        if getattr(case, "state_mutating", True) or method in WRITE_METHODS:
             found.add("state_mutating")
         volume = getattr(case, "volume_class", "single")
         if volume in ("burst", "sustained"):
@@ -174,6 +278,15 @@ class ScopePolicy(object):
         endpoint = getattr(case, "endpoint", None)
         method = (getattr(case, "method", "") or "").upper()
 
+        # The engagement mode is checked first and cannot be authorised away.
+        mode_denied = self.classes_of(case) & self.hard_deny
+        if mode_denied:
+            return False, (
+                "class(es) %s are refused by engagement mode %r, which no "
+                "authorisation overrides. Re-run in a mode that permits them "
+                "if the engagement has agreed to them."
+                % (", ".join(sorted(mode_denied)), self.mode_name or "?"))
+
         if self.deny_endpoints and endpoint in self.deny_endpoints:
             return False, "endpoint %r is explicitly out of scope" % endpoint
         if self.allow_endpoints and endpoint not in self.allow_endpoints:
@@ -206,6 +319,16 @@ class ScopePolicy(object):
         if not denied:
             return True, note or "within scope"
 
+        derived_note = ""
+        if ("state_mutating" in denied
+                and not getattr(case, "state_mutating", True)):
+            derived_note = (
+                " (this case declares state_mutating=False, but it uses the "
+                "write method %s, so the gate treats it as mutating: a "
+                "request that creates a record when the validation it probes "
+                "is missing is not non-mutating)"
+                % ((getattr(case, "method", "") or "").upper()))
+
         uncovered = []
         covering = []
         for klass in sorted(denied):
@@ -216,8 +339,8 @@ class ScopePolicy(object):
             else:
                 covering.append("%s authorised by %s" % (klass, auth.describe()))
         if uncovered:
-            return False, ("denied class(es) %s with no valid authorisation"
-                           % ", ".join(uncovered))
+            return False, ("denied class(es) %s with no valid authorisation%s"
+                           % (", ".join(uncovered), derived_note))
         if note:
             covering.append(note)
         return True, "; ".join(covering)

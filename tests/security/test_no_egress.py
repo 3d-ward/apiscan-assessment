@@ -16,7 +16,7 @@ import ipaddress
 import socket
 import unittest
 
-from tests.support import ROOT, auth_for, load_profile  # noqa: F401
+from tests.support import test_scope, ROOT, auth_for, load_profile  # noqa: F401
 
 
 def _is_loopback(host):
@@ -132,7 +132,7 @@ class TestNoEgress(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="apiscan-args-")
         profile = load_profile(base_url="http://127.0.0.1:9/v1", proxy=None)
         transport = Transport(profile, auth_for(profile), body_dir=tmp,
-                              via_proxy=False)
+                              via_proxy=False, scope_policy=test_scope())
         args = transport.build_args(profile.url_for("resource_create"))
         urls = [a for a in args if a.startswith(("http://", "https://"))]
         self.assertEqual(urls, ["http://127.0.0.1:9/v1/notify/created"])

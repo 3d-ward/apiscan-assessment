@@ -16,14 +16,20 @@ the body of an otherwise correctly rejected request is still a finding.
 import json
 import time
 
+from .core.errors import FrameworkError
 from .core.transport import Transport
 from .evidence.provenance import CaptureMethod
+from .governance.limits import Budget, RunLimits
 from .governance.scope import ScopePolicy
 from .oracle import detectors as DT
 from .oracle import layers as L
 from .oracle import verdict as V
 
 SKIPPED = "SKIPPED"
+#: A case that was in scope but never sent because the run hit a ceiling or a
+#: stop condition. Distinct from SKIPPED so coverage accounting can say "the
+#: run stopped early" rather than "the engagement excluded this".
+NOT_REACHED = "NOT-REACHED"
 
 
 class Result(object):
@@ -45,7 +51,8 @@ class Result(object):
 class Runner(object):
     def __init__(self, profile, auth_provider, evidence_store,
                  scope_policy=None, via_proxy=True, verdict_policy=None,
-                 detector_rules=None, delay_s=None, capture_method=None):
+                 detector_rules=None, delay_s=None, capture_method=None,
+                 limits=None, mode=None):
         self.profile = profile
         self.auth = auth_provider
         self.store = evidence_store
@@ -56,13 +63,25 @@ class Runner(object):
             or (profile.response_model.get("verdict_policy") or "layered"))
         self.rules = detector_rules if detector_rules is not None \
             else DT.load_rules()
-        self.delay_s = (profile.transport.get("delay_s", 0.25)
-                        if delay_s is None else delay_s)
+        self.mode = mode
+        #: The scope policy narrowed by the engagement mode. Both have to
+        #: permit a request, and this is the object that decides.
+        if mode is not None:
+            self.scope = self.scope.with_mode(mode)
+        self.limits = limits or (mode.limits if mode is not None
+                                 else RunLimits())
+        self.budget = Budget(self.limits)
+        self.delay_s = max(
+            (profile.transport.get("delay_s", 0.25)
+             if delay_s is None else delay_s),
+            self.limits.min_delay_s)
         self.capture_method = capture_method or (
             CaptureMethod.PROXY if via_proxy else CaptureMethod.DIRECT)
         self.transport = Transport(profile, auth_provider,
                                    body_dir=evidence_store.run_dir,
-                                   via_proxy=via_proxy)
+                                   scope_policy=self.scope,
+                                   via_proxy=via_proxy,
+                                   limits=self.limits, budget=self.budget)
 
     # -- single case -----------------------------------------------------
     def run_case(self, case, today=None):
@@ -74,16 +93,35 @@ class Runner(object):
         if not permitted:
             return self.store.record(self._skip_record(case, reason))
 
+        may_continue, stop_reason = self.budget.check()
+        if not may_continue:
+            return self.store.record(
+                self._skip_record(case, stop_reason, verdict=NOT_REACHED))
+
         url = self.profile.url_for(case.endpoint)
         trace = self.store.trace_path(case.id)
-        response = self.transport.send(
-            case.id, url, method=case.method,
-            identity=case.identity or self.auth.default_identity,
-            header_overrides=case.header_overrides,
-            content_type=case.content_type, body=case.body,
-            trace_file=trace,
-            use_proxy=(case.use_proxy if case.use_proxy is not None
-                       else self.via_proxy))
+        # The case IS the probe: the transport re-evaluates it at the point
+        # the socket is opened, so a caller that bypassed this runner cannot
+        # bypass the gate.
+        try:
+            response = self.transport.send(
+                case.id, url, method=case.method,
+                identity=case.identity or self.auth.default_identity,
+                header_overrides=case.header_overrides,
+                content_type=case.content_type, body=case.body,
+                trace_file=trace, probe=case, today=today,
+                use_proxy=(case.use_proxy if case.use_proxy is not None
+                           else self.via_proxy))
+        except FrameworkError as exc:
+            # The gate and the budget are evaluated twice: once here, for the
+            # record, and again inside the transport at the moment the socket
+            # would open. They should always agree. If they ever do not, the
+            # safe outcome is that this case is refused and recorded -- not
+            # that an exception unwinds the loop and discards the evidence
+            # already captured for every case before it.
+            return self.store.record(self._skip_record(
+                case, "refused at the transport: %s" % exc,
+                verdict=V.ERROR))
         self.store.write_response(case.id, response)
 
         attribution = L.attribute(response, self.profile.response_model)
@@ -107,7 +145,11 @@ class Runner(object):
         return self.store.record(Result(
             case_id=case.id, family=case.family, phase=case.phase,
             endpoint=case.endpoint, method_http=case.method,
-            content_type=case.content_type, identity=case.identity,
+            content_type=case.content_type,
+            # The identity ACTUALLY used, not the one the case left unset. A
+            # finding cites its baseline by identity, and "default" is not a
+            # name anyone can check against the engagement's credentials.
+            identity=(case.identity or self.auth.default_identity),
             description=case.description, expectation=case.expectation,
             finding_id=case.finding_id, owasp=case.owasp,
             spec_reference=case.spec_reference,
@@ -134,10 +176,13 @@ class Runner(object):
             time_total=response.meta.get("time_total"),
             via=response.meta.get("via"),
             curl_rc=response.meta.get("curl_rc"),
+            tls_verification=response.meta.get("tls_verification"),
+            body_truncated=bool(response.meta.get("body_truncated")),
+            header_stream=response.meta.get("header_stream"),
             notes=case.notes,
         ).as_dict())
 
-    def _skip_record(self, case, reason):
+    def _skip_record(self, case, reason, verdict=SKIPPED):
         return Result(
             case_id=case.id, family=case.family, phase=case.phase,
             endpoint=case.endpoint, method_http=case.method,
@@ -146,7 +191,7 @@ class Runner(object):
             payload_class=case.payload_class,
             state_mutating=case.state_mutating,
             severity_if_accepted=case.severity_if_accepted,
-            executed=False, verdict=SKIPPED, scope_reason=reason,
+            executed=False, verdict=verdict, scope_reason=reason,
             verdict_reason="not executed: %s" % reason,
             http_status=None, layer=None, detector_hits=[],
             markers_matched=[], capture_method=None,
@@ -156,6 +201,7 @@ class Runner(object):
     def run(self, cases, progress=None, today=None):
         out = []
         total = len(cases)
+        self.budget.start()
         for i, case in enumerate(cases, 1):
             rec = self.run_case(case, today=today)
             out.append(rec)
@@ -165,13 +211,17 @@ class Runner(object):
                 time.sleep(self.delay_s)
         return out
 
+    def stop_report(self):
+        """What stopped the run, if anything did. Goes into run metadata."""
+        return self.budget.as_dict()
+
 
 def default_progress(i, total, rec):
     flag = {
         V.CONTROL_PRESENT: "[ ok ]", V.CONTROL_ABSENT: "[FIND]",
         V.OVER_BLOCKED: "[OVER]", V.BLOCKED: "[blkd]",
         V.ERROR: "[ err]", V.OBSERVED: "[obsv]", V.UNCLEAR: "[  ? ]",
-        SKIPPED: "[skip]",
+        SKIPPED: "[skip]", NOT_REACHED: "[stop]",
     }.get(rec.get("verdict"), "[    ]")
     extra = ""
     if rec.get("detector_hits"):
@@ -193,6 +243,7 @@ def summarise(records):
         "total": len(records),
         "executed": executed,
         "skipped": verdicts.get(SKIPPED, 0),
+        "not_reached": verdicts.get(NOT_REACHED, 0),
         "blocked": verdicts.get(V.BLOCKED, 0),
         "errors": verdicts.get(V.ERROR, 0),
         "control_present": verdicts.get(V.CONTROL_PRESENT, 0),
@@ -215,7 +266,8 @@ def reclassify(run_dir, cases, profile, verdict_policy=None,
     tests pin oracle behaviour against recorded fixtures.
     """
     import os
-    import re
+
+    from .evidence.store import parse_response_file
 
     rules = detector_rules if detector_rules is not None else DT.load_rules()
     policy = verdict_policy or (profile.response_model.get("verdict_policy")
@@ -241,17 +293,25 @@ def reclassify(run_dir, cases, profile, verdict_policy=None,
             except (TypeError, ValueError):
                 return 0
 
+        def header(self, name):
+            want = name.lower()
+            for line in (self.headers or "").splitlines():
+                if ":" in line and \
+                        line.split(":", 1)[0].strip().lower() == want:
+                    return line.split(":", 1)[1].strip()
+            return None
+
     for case_id, case in sorted(by_id.items()):
-        path = os.path.join(run_dir, "%s.resp.txt" % case_id)
+        from .core.pathguard import safe_join
+        path = safe_join(run_dir, "%s.resp.txt" % case_id,
+                         what="stored response")
         if not os.path.exists(path):
             continue
-        with open(path, errors="replace") as fh:
-            blob = fh.read()
-        m = re.match(r"HTTP (\d{3}|000)", blob)
-        status = m.group(1) if m else "000"
-        parts = re.split(r"\n\n", blob, maxsplit=2)
-        headers = parts[1] if len(parts) > 1 else ""
-        body = parts[2] if len(parts) > 2 else ""
+        # Parsed by declared section length, so a target-controlled body
+        # cannot relocate the header boundary and change its own verdict.
+        stored = parse_response_file(path)
+        status, headers, body = (stored["status"], stored["headers"],
+                                 stored["body"])
         resp = _Stored(status, headers, body)
         attribution = L.attribute(resp, profile.response_model)
         decision = V.decide(case.expectation, attribution, policy=policy,
@@ -272,5 +332,8 @@ def reclassify(run_dir, cases, profile, verdict_policy=None,
             "finding_id": case.finding_id, "phase": case.phase,
             "family": case.family,
             "severity_if_accepted": case.severity_if_accepted,
+            "evidence_format": ("legacy-heuristic" if stored["legacy_format"]
+                                else "length-declared"),
+            "body_truncated": stored["truncated"],
         })
     return out

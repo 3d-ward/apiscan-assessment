@@ -121,15 +121,40 @@ def rollback(snapshot_id, store=None, root=None, safety_snapshot=True):
     with open(mpath) as fh:
         manifest = json.load(fh)
 
+    # ENGINEERING IMPROVEMENT (review finding: "validate resolved file
+    # destinations before writing"). Each path comes from a manifest, which is
+    # a FILE -- and a snapshot store lives outside the framework where this
+    # process is not the only writer. An entry of "../../.ssh/authorized_keys"
+    # previously resolved wherever it pointed, with this process's privileges.
+    # Both ends are now constrained: the source must stay inside the
+    # snapshot's own tree and the destination inside the framework.
+    import sys
+    sys.path.insert(0, FRAMEWORK_ROOT)
+    from framework.core.errors import PathGuardError
+    from framework.core.pathguard import safe_relative_join
+
     restored = 0
+    refused = []
     for entry in manifest["files"]:
-        s = os.path.join(src, entry["path"])
-        d = os.path.join(root, entry["path"])
+        try:
+            s = safe_relative_join(src, entry["path"],
+                                   what="snapshot source file")
+            d = safe_relative_join(root, entry["path"],
+                                   what="snapshot destination")
+        except PathGuardError as exc:
+            refused.append(str(exc))
+            continue
         if not os.path.exists(s):
             continue
         os.makedirs(os.path.dirname(d), exist_ok=True)
         shutil.copy2(s, d)
         restored += 1
+    if refused:
+        raise ValueError(
+            "snapshot %s contains %d manifest path(s) that would write "
+            "outside the framework tree; NOTHING further was restored and the "
+            "snapshot should be treated as untrustworthy:\n  %s"
+            % (snapshot_id, len(refused), "\n  ".join(refused[:5])))
     return restored
 
 

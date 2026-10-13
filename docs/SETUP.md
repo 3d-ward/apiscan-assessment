@@ -19,6 +19,7 @@ Check what is available:
 
 ```bash
 ./apiscan preflight --profile <profile> --offline --all
+./apiscan version            # what THIS host can actually do
 ```
 
 ## Install
